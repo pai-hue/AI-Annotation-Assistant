@@ -1,0 +1,13 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# ±æµÿ≈‰÷√”Î√‹‘ø
+.env
+.env.*
+!.env.example
+
+# «∞∂À“¿¿µ
+node_modules/
