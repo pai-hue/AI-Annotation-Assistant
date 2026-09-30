@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "AI Annotation Assistant",
+  "version": "0.2.0",
+  "description": "本地工业视觉标注测试：生成模拟框并交由人工审核。",
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": {"service_worker": "background.js"},
+  "content_scripts": [{
+    "matches": ["http://127.0.0.1/demo/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle"
+  }, {
+    "matches": ["https://www.threetone.com.cn/train/annotation/*/editor"],
+    "js": ["platform-main.js"],
+    "world": "MAIN",
+    "run_at": "document_idle"
+  }, {
+    "matches": ["https://www.threetone.com.cn/train/annotation/*/editor"],
+    "js": ["platform-content.js"],
+    "run_at": "document_idle"
+  }]
+}
