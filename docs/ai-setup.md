@@ -43,7 +43,7 @@ QWEN_MODEL=qwen3-vl-flash
 ## 3. 重新加载扩展
 
 1. 在 Edge 地址栏输入 `edge://extensions/`。
-2. 找到 FramePilot，点击重新加载，确认版本为 `0.4.0`。
+2. 找到 FramePilot，点击重新加载，确认版本为 `1.0.0`。
 3. 刷新原网站标注页。
 4. 暂停播放，选择一张没有标注、允许发送给阿里云百炼的测试图片；确保项目已有合适的类别名。
 5. 面板显示“预标注”和“模拟测试”。模拟测试保留原来的固定框功能，不发送图片。
@@ -79,9 +79,12 @@ AI 使用项目类别表中的全部类别，保留原 ID；它不会把所有�
   "input_width": 1600,
   "input_height": 800,
   "image_data_url": "data:image/jpeg;base64,图片Base64内容",
-  "classes": [{"id": 0, "name": "工件主体"}, {"id": 3, "name": "电动螺丝刀"}]
+  "classes": [{"id": 0, "name": "工件主体"}, {"id": 3, "name": "电动螺丝刀"}],
+  "enabled_class_ids": [0, 3]
 }
 ```
+
+`enabled_class_ids` 为可选字段，是 `classes` 中 `id` 的非空子集，表示本次只让千问识别这些类别；省略时识别全部类别。类别列表仍按原网站完整发送，因此返回框的 `class_id` 不变。
 
 本机接口返回沿用 `schema_version/image_id/image_width/image_height/objects`，`source` 为 `qwen`，附带 `model`；每个框包含 `id/class_id/class_name/x/y/width/height`，坐标均为原图像素。没有审核状态字段。空 `objects` 仅表示本次未生成框，仍需人工检查。
 

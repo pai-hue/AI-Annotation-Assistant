@@ -25,7 +25,7 @@ function fixture() {
   vm.runInContext(fs.readFileSync(path.join(__dirname,'platform-main.js'),'utf8'),context);
   const send=data=>listener({source:window,origin:'https://www.threetone.com.cn',data:{channel:'aaa-deepdata-v1',from:'extension',...data}});
   const response=()=>({ok:true,data:{schema_version:'1.0',source:'mock',image_id:'request-1',image_width:1000,image_height:800,objects:[{id:'box-1',class_id:0,class_name:'part_A',x:100,y:80,width:200,height:160}]}});
-  const begin=(mode='mock',crop)=>send({type:'begin',requestId:'request-1',mode,crop});
+  const begin=(mode='mock',crop)=>send({type:'begin',requestId:'request-1',mode,crop,...(mode==='ai'?{enabledClassIds:[0,1]}:{})});
   const finish=(value=response())=>send({type:'result',requestId:'request-1',response:value});
   return {context,messages,captures,send,begin,finish,response,read:code=>vm.runInContext(code,context)};
 }
@@ -191,4 +191,32 @@ test('reference capture failure reports an error without writing',()=>{
   p.finish({ok:false,error:'offline'});
   assert.equal(p.read('annotations["test.png"]'),undefined);
   assert.ok(p.messages.some(m=>m.type==='done' && m.error));
+});
+
+test('state announces project classes even before an image is ready',()=>{
+  const p=fixture();
+  p.read('classes=[]');p.send({type:'hello'});
+  assert.equal(p.messages.findLast(m=>m.type==='state').classes,null);
+  p.read("classes=['workpiece','part']");p.send({type:'hello'});
+  assert.deepEqual(JSON.parse(JSON.stringify(p.messages.findLast(m=>m.type==='state').classes)),[{id:0,name:'workpiece'},{id:1,name:'part'}]);
+});
+
+test('AI requires a non-empty valid enabled class list and forwards it',()=>{
+  const p=fixture();
+  p.send({type:'begin',requestId:'r1',mode:'ai'});
+  assert.equal(p.messages.some(m=>m.type==='request'),false);
+  assert.ok(p.messages.some(m=>m.type==='done' && m.error));
+  const p2=fixture();
+  p2.send({type:'begin',requestId:'r2',mode:'ai',enabledClassIds:[1]});
+  const req=p2.messages.findLast(m=>m.type==='request');
+  assert.equal(req.mode,'ai');
+  assert.deepEqual(req.image.enabled_class_ids,[1]);
+  assert.deepEqual(JSON.parse(JSON.stringify(req.image.classes)),[{id:0,name:'workpiece'},{id:1,name:'part'}]);
+  p2.send({type:'result',requestId:'r2',response:{ok:false,error:'cancel'}});
+  for(const bad of [[],[2],['0'],[0,0]]) {
+    const p3=fixture();
+    p3.send({type:'begin',requestId:'r3',mode:'ai',enabledClassIds:bad});
+    assert.equal(p3.messages.some(m=>m.type==='request'),false);
+    assert.ok(p3.messages.some(m=>m.type==='done' && m.error));
+  }
 });

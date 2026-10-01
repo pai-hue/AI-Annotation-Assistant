@@ -69,6 +69,7 @@ class AIRequest(StrictModel):
     input_height: int = Field(gt=0, le=MAX_SIDE)
     image_data_url: str = Field(max_length=MAX_DATA_URL, repr=False)
     classes: list[ProjectClass] = Field(min_length=1, max_length=100)
+    enabled_class_ids: list[int] | None = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
     def validate_metadata(self):
@@ -78,6 +79,17 @@ class AIRequest(StrictModel):
         expected = tuple(max(1, math.floor(n * ratio + 0.5)) for n in (self.image_width, self.image_height))
         if expected != (self.input_width, self.input_height):
             raise ValueError("Image must be resized proportionally without cropping")
+        return self
+
+    @model_validator(mode="after")
+    def validate_enabled(self):
+        if self.enabled_class_ids is None:
+            return self
+        if not self.enabled_class_ids:
+            raise ValueError("No enabled classes")
+        ids = {c.id for c in self.classes}
+        if len(set(self.enabled_class_ids)) != len(self.enabled_class_ids) or any(i not in ids for i in self.enabled_class_ids):
+            raise ValueError("Invalid enabled class ids")
         return self
 
 
@@ -189,11 +201,19 @@ def load_references(classes: list[ProjectClass]) -> list[dict]:
     return references
 
 
+def active_classes(request: AIRequest) -> list[ProjectClass]:
+    if request.enabled_class_ids is None:
+        return request.classes
+    enabled = set(request.enabled_class_ids)
+    return [c for c in request.classes if c.id in enabled]
+
+
 def build_payload(request: AIRequest, model: str, references=()) -> dict:
+    active = active_classes(request)
     # Qwen3-VL supports JSON Object mode; validate the full schema locally.
     example = {"objects": [
-        {"class_id": request.classes[0].id, "xmin": 100, "ymin": 200, "xmax": 400, "ymax": 600},
-        {"class_id": request.classes[0].id, "xmin": 400, "ymin": 200, "xmax": 700, "ymax": 600},
+        {"class_id": active[0].id, "xmin": 100, "ymin": 200, "xmax": 400, "ymax": 600},
+        {"class_id": active[0].id, "xmin": 400, "ymin": 200, "xmax": 700, "ymax": 600},
     ]}
     content = []
     if references:
@@ -206,7 +226,7 @@ def build_payload(request: AIRequest, model: str, references=()) -> dict:
         content.append({"type": "text", "text": "以下是需要检测的目标图片："})
     content.append({"type": "image_url", "image_url": {"url": request.image_data_url}})
     content.append({"type": "text", "text": "请检测图片中以下类别的所有可见实例。项目类别：" + json.dumps(
-        [c.model_dump() for c in request.classes], ensure_ascii=False)
+        [c.model_dump() for c in active], ensure_ascii=False)
         + "\nJSON 格式示例（同一类别的两个独立实例分别出框；类别、数量和坐标仅作格式说明，"
           "请按目标图片的实际实例输出，不要固定输出两个框）：" + json.dumps(example)})
     return {
@@ -251,7 +271,7 @@ def convert_response(payload: dict, request: AIRequest, model: str) -> dict:
         if not isinstance(content, str) or not content.strip():
             raise ValueError("Missing JSON result")
         result = ModelResult.model_validate_json(content)
-        names = {c.id: c.name for c in request.classes}
+        names = {c.id: c.name for c in active_classes(request)}
         boxes = []
         for index, box in enumerate(result.objects):
             if box.class_id not in names:
@@ -272,6 +292,9 @@ async def generate_annotations(request: AIRequest, settings: Settings, *, transp
         raise AIError("not_configured", "尚未配置千问 API Key，请在项目根目录 .env 中填写北京地域的 DASHSCOPE_API_KEY。", 503)
     validate_image(request)
     references = load_references(request.classes)
+    if request.enabled_class_ids is not None:
+        enabled = set(request.enabled_class_ids)
+        references = [ref for ref in references if ref["class_id"] in enabled]
     try:
         # One attempt, fixed destination, no provider redirects and no automatic retries.
         async with asyncio.timeout(MODEL_TIMEOUT):

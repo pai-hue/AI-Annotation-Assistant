@@ -24,11 +24,16 @@
     return {project:projectName,filename,src:image.src,width:canvas.width,height:canvas.height,
       classId:currentClassIdx,className:classes[currentClassIdx],classes:JSON.stringify(classes)};
   }
+  function readClasses() {
+    if(!Array.isArray(classes) || !classes.length || !classes.every(name=>typeof name==="string" && name.trim())) return null;
+    return classes.map((name,id)=>({id,name}));
+  }
   function announce() {
+    const list=readClasses();
     try {
       const state=snapshot();
-      post({type:"state",ready:!pending,busy:!!pending,label:`模拟类别：${state.className}；AI 使用项目全部 ${classes.length} 个类别。`});
-    } catch(error) { post({type:"state",ready:false,busy:!!pending,label:error.message}); }
+      post({type:"state",ready:!pending,busy:!!pending,label:`模拟类别：${state.className}；AI 将识别下方所选类别。`,classes:list});
+    } catch(error) { post({type:"state",ready:false,busy:!!pending,label:error.message,classes:list}); }
   }
   function finish(message, error=false) {
     const requestId=pending?.requestId;
@@ -75,7 +80,12 @@
         pending={state,image,mode,requestId:message.requestId,timer:setTimeout(()=>finish("请求超时，请检查本机服务后重试。",true),30000)};
         announce();
         let payload;
-        if(mode==="ai") payload={...image,...captureImage(state)};
+        if(mode==="ai") {
+          const enabled=message.enabledClassIds;
+          if(!Array.isArray(enabled) || !enabled.length) throw Error("请至少选择一个要识别的类别。");
+          if(enabled.some(id=>!Number.isInteger(id) || id<0 || id>=classes.length) || new Set(enabled).size !== enabled.length) throw Error("类别选择无效，请刷新页面重试。");
+          payload={...image,...captureImage(state),enabled_class_ids:enabled};
+        }
         else if(mode==="reference") {
           const c=message.crop;
           if(!c || ![c.x,c.y,c.width,c.height].every(Number.isFinite) || c.x<0 || c.y<0 || c.width<=0 || c.height<=0 ||

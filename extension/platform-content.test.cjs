@@ -9,7 +9,7 @@ function panel() {
   const canvasEl={tag:'canvas',width:1000,height:800,getBoundingClientRect:()=>({left:0,top:0,width:500,height:400})};
   const element=tag=>{
     const node={tag,children:[],listeners:{},style:{setProperty(name,value){this[name]=value;}},checked:false,append(...items){this.children.push(...items);},
-      attachShadow(){return element('shadow');},setAttribute(){},remove(){},
+      attachShadow(){return element('shadow');},setAttribute(){},remove(){},replaceChildren(...items){this.children=[...items];},
       getBoundingClientRect(){return {left:250,top:0,width:330,height:120};},setPointerCapture(){},
       addEventListener(type,fn){this.listeners[type]=fn;}};
     elements.push(node);return node;
@@ -31,7 +31,7 @@ function panel() {
 test('AI requires explicit consent and a trusted click, and never starts from page messages',t=>{
   const p=panel();t.after(p.cleanup);
   assert.ok(p.elements.some(e=>e.textContent==='允许将当前图片、示例图及项目类别发送到阿里云百炼'));
-  p.receive({type:'state',ready:true});
+  p.receive({type:'state',ready:true,classes:[{id:0,name:'part'}]});
   assert.equal(p.ai.disabled,true);assert.equal(p.mock.disabled,false);
   p.ai.listeners.click({isTrusted:true});
   p.receive({type:'request',requestId:'forged',mode:'ai',image:{}});
@@ -49,7 +49,7 @@ test('AI requires explicit consent and a trusted click, and never starts from pa
   p.requests[0].callback({ok:false,error:'not configured'});
   assert.equal(p.posted.at(-1).type,'result');
   p.receive({type:'done',requestId:begin.requestId,message:'not configured',error:true});
-  p.receive({type:'state',ready:true});assert.equal(p.ai.disabled,false);
+  p.receive({type:'state',ready:true,classes:[{id:0,name:'part'}]});assert.equal(p.ai.disabled,false);
 });
 
 test('drag handle moves the panel and clamps it to the viewport',()=>{
@@ -98,7 +98,7 @@ test('mock needs no AI consent, and obsolete callbacks do not finish a newer req
 });
 
 test('Enter shortcut starts an AI request and is ignored on repeats, wrong keys and focused controls',()=>{
-  const p=panel();p.receive({type:'state',ready:true});
+  const p=panel();p.receive({type:'state',ready:true,classes:[{id:0,name:'part'}]});
   p.consent.checked=true;p.consent.listeners.change();
   const fire=(over={})=>p.keydown({key:'Enter',ctrlKey:false,altKey:false,metaKey:false,shiftKey:false,isTrusted:true,repeat:false,preventDefault(){},...over});
   fire({key:'a'});
@@ -147,4 +147,30 @@ test('capture-example cancel exits crop mode without sending',()=>{
   cancel.listeners.click({isTrusted:true});
   assert.equal(p.posted.some(m=>m.type==='begin'),false);
   assert.equal(p.ref.disabled,false);
+});
+
+test('category squares toggle and AI begin sends only enabled class ids',t=>{
+  const p=panel();t.after(p.cleanup);
+  p.receive({type:'state',ready:true,classes:[{id:0,name:'工件'},{id:1,name:'part'}]});
+  const list=p.elements.find(e=>e.className==='class-list');
+  assert.ok(list);assert.equal(list.children.length,2);
+  const item0=list.children[0];
+  assert.equal(item0.children[0].className,'class-box on');
+  p.consent.checked=true;p.consent.listeners.change();
+  const complete=id=>p.receive({type:'done',requestId:id,message:'ok'});
+  p.ai.listeners.click({isTrusted:true});
+  let begin=p.posted.at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(begin.enabledClassIds)),[0,1]);
+  complete(begin.requestId);
+  item0.listeners.click();
+  assert.equal(item0.children[0].className,'class-box');
+  p.ai.listeners.click({isTrusted:true});
+  begin=p.posted.at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(begin.enabledClassIds)),[1]);
+  complete(begin.requestId);
+  list.children[1].listeners.click();
+  assert.equal(p.ai.disabled,true);
+  const before=p.posted.filter(m=>m.type==='begin').length;
+  p.ai.listeners.click({isTrusted:true});
+  assert.equal(p.posted.filter(m=>m.type==='begin').length,before);
 });

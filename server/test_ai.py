@@ -154,6 +154,37 @@ class ModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, "invalid_model_result")
         self.assertNotIn("private", caught.exception.message)
 
+    def _reference_request(self, class_id):
+        buffer = BytesIO()
+        Image.new("RGB", (320, 240), (10, 20, 30)).save(buffer, format="JPEG")
+        return ReferenceRequest(classes=[ProjectClass(id=3, name="工件"), ProjectClass(id=9, name="part")],
+            class_id=class_id, input_width=320, input_height=240,
+            image_data_url="data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode())
+
+    async def test_enabled_classes_filter_prompt_and_references(self):
+        save_reference(self._reference_request(9))
+        request = AIRequest(**{**sample(), "enabled_class_ids": [3]})
+        captured = []
+
+        def provider(req):
+            captured.append(req)
+            return httpx.Response(200, json=model_reply(objects=[dict(class_id=3, xmin=100, ymin=250, xmax=600, ymax=750)]))
+
+        result = await generate_annotations(request, Settings("fake"), transport=httpx.MockTransport(provider))
+        self.assertEqual(result["objects"], [dict(id="ai-1", class_id=3, class_name="工件", x=10, y=20, width=50, height=40)])
+        wire = json.loads(captured[0].content)
+        content = wire["messages"][1]["content"]
+        self.assertEqual(content[0], {"type": "image_url", "image_url": {"url": request.image_data_url}})
+        self.assertIn('"id": 3', content[-1]["text"])
+        self.assertNotIn('"id": 9', content[-1]["text"])
+
+    async def test_disabled_class_output_is_rejected(self):
+        request = AIRequest(**{**sample(), "enabled_class_ids": [3]})
+        with self.assertRaises(AIError) as caught:
+            await generate_annotations(request, Settings("fake"), transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, json=model_reply())))
+        self.assertEqual(caught.exception.code, "invalid_model_result")
+
 
 class ValidationTests(unittest.TestCase):
     def test_invalid_model_boxes_rejected_atomically(self):
@@ -215,6 +246,14 @@ class ValidationTests(unittest.TestCase):
         result = convert_response(model_reply(), AIRequest(**values), "test")
         box = result["objects"][0]
         self.assertEqual([box[k] for k in ("x", "y", "width", "height")], [400, 500, 2000, 1000])
+
+    def test_enabled_class_ids_must_be_a_nonempty_subset(self):
+        AIRequest(**{**sample(), "enabled_class_ids": [3]})
+        AIRequest(**{**sample(), "enabled_class_ids": [3, 9]})
+        for values in [dict(enabled_class_ids=[]), dict(enabled_class_ids=[7]), dict(enabled_class_ids=[3, 3]),
+                       dict(enabled_class_ids=[3, 9, 7]), dict(enabled_class_ids=["3"])]:
+            with self.subTest(values=values), self.assertRaises(ValidationError):
+                AIRequest(**{**sample(), **values})
 
 
 class EndpointTests(unittest.TestCase):

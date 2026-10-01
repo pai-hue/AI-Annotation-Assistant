@@ -22,11 +22,16 @@ function validAIImage(image) {
       !/^data:image\/(jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$/.test(image.image_data_url) ||
       !Array.isArray(image.classes) || !image.classes.length || image.classes.length>100) return false;
   const ids=new Set();
-  return image.classes.every(c=>{
+  if(!image.classes.every(c=>{
     if(!c || !Number.isInteger(c.id) || c.id<0 || c.id>1000000 || ids.has(c.id) ||
         typeof c.name!=="string" || !c.name.trim() || c.name.length>100) return false;
     ids.add(c.id);return true;
-  });
+  })) return false;
+  if(image.enabled_class_ids !== undefined &&
+     (!Array.isArray(image.enabled_class_ids) || !image.enabled_class_ids.length ||
+      image.enabled_class_ids.some(id=>!Number.isInteger(id) || !ids.has(id)) ||
+      new Set(image.enabled_class_ids).size !== image.enabled_class_ids.length)) return false;
+  return true;
 }
 function validReferenceImage(image) {
   if (!validImage(image) || ![image.input_width,image.input_height].every(n=>Number.isInteger(n) && n>0 && n<=640) ||
@@ -61,6 +66,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     body.input_width=message.image.input_width;body.input_height=message.image.input_height;
     body.image_data_url=message.image.image_data_url;
     body.classes=message.image.classes.map(c=>({id:c.id,name:c.name}));
+    if(message.image.enabled_class_ids !== undefined) body.enabled_class_ids=message.image.enabled_class_ids;
   }
   if(ref) {
     body.input_width=message.image.input_width;body.input_height=message.image.input_height;

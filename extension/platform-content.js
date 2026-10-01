@@ -6,7 +6,7 @@
   const host=document.createElement("div");host.id="aaa-platform-panel";
   const shadow=host.attachShadow({mode:"closed"});
   const style=document.createElement("style");
-  style.textContent=":host{position:fixed;bottom:18px;left:250px;z-index:9999}@media(max-width:720px){:host{left:12px}}section{position:relative;overflow:auto;font-family:'Segoe UI',sans-serif;font-size:calc(var(--s,1)*13px);line-height:1.5;background:#fff;color:#173c38;border:1px solid #82b6ac;border-radius:calc(var(--s,1)*10px);padding:calc(var(--s,1)*12px) calc(var(--s,1)*16px);width:330px;max-width:calc(100vw - 58px);box-shadow:0 3px 20px #0002}button{font:inherit;background:#126b62;color:white;border:0;border-radius:calc(var(--s,1)*6px);padding:calc(var(--s,1)*8px) calc(var(--s,1)*14px);cursor:pointer;margin-right:calc(var(--s,1)*8px)}button.secondary{background:#e7efed;color:#28534b}button:disabled{opacity:.45;cursor:not-allowed}p{margin:calc(var(--s,1)*6px) 0 0;overflow-wrap:anywhere}label{display:flex;gap:calc(var(--s,1)*6px);margin:calc(var(--s,1)*8px) 0;align-items:flex-start}input{margin-top:calc(var(--s,1)*4px);accent-color:#126b62}.panel-header{cursor:move;user-select:none;touch-action:none;display:flex;align-items:center;justify-content:space-between;gap:calc(var(--s,1)*8px);font-weight:600;color:#126b62;padding-bottom:calc(var(--s,1)*8px);margin-bottom:calc(var(--s,1)*8px);border-bottom:1px solid #e7efed}.grip{color:#82b6ac;font-size:calc(var(--s,1)*12px);letter-spacing:calc(var(--s,1)*2px)}.resize-handle{position:absolute;right:3px;bottom:3px;width:12px;height:12px;cursor:se-resize;touch-action:none;border-right:2px solid #82b6ac;border-bottom:2px solid #82b6ac;border-radius:0 0 3px 0}";
+  style.textContent=":host{position:fixed;bottom:18px;left:250px;z-index:9999}@media(max-width:720px){:host{left:12px}}section{position:relative;overflow:auto;font-family:'Segoe UI',sans-serif;font-size:calc(var(--s,1)*13px);line-height:1.5;background:#fff;color:#173c38;border:1px solid #82b6ac;border-radius:calc(var(--s,1)*10px);padding:calc(var(--s,1)*12px) calc(var(--s,1)*16px);width:330px;max-width:calc(100vw - 58px);box-shadow:0 3px 20px #0002}button{font:inherit;background:#126b62;color:white;border:0;border-radius:calc(var(--s,1)*6px);padding:calc(var(--s,1)*8px) calc(var(--s,1)*14px);cursor:pointer;margin-right:calc(var(--s,1)*8px)}button.secondary{background:#e7efed;color:#28534b}button:disabled{opacity:.45;cursor:not-allowed}p{margin:calc(var(--s,1)*6px) 0 0;overflow-wrap:anywhere}label{display:flex;gap:calc(var(--s,1)*6px);margin:calc(var(--s,1)*8px) 0;align-items:flex-start}input{margin-top:calc(var(--s,1)*4px);accent-color:#126b62}.panel-header{cursor:move;user-select:none;touch-action:none;display:flex;align-items:center;justify-content:space-between;gap:calc(var(--s,1)*8px);font-weight:600;color:#126b62;padding-bottom:calc(var(--s,1)*8px);margin-bottom:calc(var(--s,1)*8px);border-bottom:1px solid #e7efed}.grip{color:#82b6ac;font-size:calc(var(--s,1)*12px);letter-spacing:calc(var(--s,1)*2px)}.resize-handle{position:absolute;right:3px;bottom:3px;width:12px;height:12px;cursor:se-resize;touch-action:none;border-right:2px solid #82b6ac;border-bottom:2px solid #82b6ac;border-radius:0 0 3px 0}.class-header{font-weight:600;color:#126b62;margin:calc(var(--s,1)*8px) 0 calc(var(--s,1)*4px)}.class-list{max-height:calc(var(--s,1)*180px);overflow:auto;border:1px solid #e7efed;border-radius:calc(var(--s,1)*6px);padding:calc(var(--s,1)*4px)}.class-item{display:flex;align-items:center;gap:calc(var(--s,1)*8px);padding:calc(var(--s,1)*3px) calc(var(--s,1)*4px);cursor:pointer;user-select:none}.class-item:hover{background:#f4faf8}.class-box{flex:none;width:calc(var(--s,1)*12px);height:calc(var(--s,1)*12px);border:calc(var(--s,1)*2px) solid #2563eb;border-radius:calc(var(--s,1)*2px);box-sizing:border-box}.class-box.on{background:#2563eb}.class-name{overflow-wrap:anywhere}";
   const panel=document.createElement("section");
   const header=document.createElement("div");header.className="panel-header";header.title="拖动标题栏可移动面板";
   const headerTitle=document.createElement("span");headerTitle.textContent="AI 预标注";
@@ -20,18 +20,44 @@
   const consent=document.createElement("input");consent.type="checkbox";
   const consentText=document.createElement("span");consentText.textContent="允许将当前图片、示例图及项目类别发送到阿里云百炼";
   consentLabel.append(consent,consentText);
+  const classHeader=document.createElement("div");classHeader.className="class-header";classHeader.textContent="识别类别（点击方块切换）";
+  const classList=document.createElement("div");classList.className="class-list";classList.setAttribute("role","group");
   const state=document.createElement("p");state.textContent="正在连接原网站标注器…";
   const feedback=document.createElement("p");feedback.setAttribute("role","status");
   const resize=document.createElement("div");resize.className="resize-handle";resize.title="拖动调整面板大小";
-  panel.append(header,aiButton,mockButton,refButton,consentLabel,state,feedback,resize);shadow.append(style,panel);document.body.append(host);
+  panel.append(header,aiButton,mockButton,refButton,consentLabel,classHeader,classList,state,feedback,resize);shadow.append(style,panel);document.body.append(host);
   let pending=null,timeout=null,ready=false,cropping=null;
+  let classEnabled=new Map(),classSig=null;
   const post=data=>window.postMessage({channel,from:"extension",...data},location.origin);
   function controls() {
     const locked=!!pending || !!cropping;
+    const noneEnabled=classEnabled.size>0 && ![...classEnabled.values()].some(Boolean);
     mockButton.disabled=locked || !ready;
     refButton.disabled=locked || !ready;
-    aiButton.disabled=locked || !ready || !consent.checked;
+    aiButton.disabled=locked || !ready || !consent.checked || noneEnabled;
     consent.disabled=locked;
+  }
+  function renderClasses(list) {
+    if(!Array.isArray(list)) return;
+    const sig=JSON.stringify(list);
+    if(sig===classSig) return;
+    classSig=sig;
+    classEnabled=new Map(list.map(c=>[c.id,true]));
+    classList.replaceChildren();
+    list.forEach(c=>{
+      const item=document.createElement("div");item.className="class-item";
+      const box=document.createElement("span");box.className="class-box on";box.setAttribute("role","checkbox");box.setAttribute("aria-checked","true");
+      const name=document.createElement("span");name.className="class-name";name.textContent=c.name;
+      item.append(box,name);
+      item.addEventListener("click",()=>{
+        const on=!classEnabled.get(c.id);
+        classEnabled.set(c.id,on);
+        box.className="class-box"+(on?" on":"");
+        box.setAttribute("aria-checked",String(on));
+        controls();
+      });
+      classList.append(item);
+    });
   }
   let drag=null;
   header.addEventListener("pointerdown",event=>{
@@ -76,11 +102,16 @@
   function begin(mode,event,crop) {
     // Page bridge messages alone cannot initiate a paid request.
     if(event.isTrusted!==true || pending || !ready || (mode==="ai" && !consent.checked)) return;
+    let enabledClassIds;
+    if(mode==="ai") {
+      enabledClassIds=[...classEnabled.entries()].filter(([,on])=>on).map(([id])=>id);
+      if(!enabledClassIds.length) { feedback.style.color="#b22"; feedback.textContent="请至少选择一个要识别的类别。"; return; }
+    }
     pending={id:crypto.randomUUID(),mode,sent:false};controls();
     feedback.style.color="#126b62";
     feedback.textContent=mode==="ai" ? "千问正在生成初始框，请保持当前图片和类别不变…" : mode==="reference" ? "正在保存示例图…" : "正在请求本机模拟服务…";
     timeout=setTimeout(()=>{pending=null;feedback.textContent="连接超时，请刷新网页后重试。";controls();post({type:"hello"});},32000);
-    post({type:"begin",requestId:pending.id,mode,crop});
+    post({type:"begin",requestId:pending.id,mode,crop,...(enabledClassIds?{enabledClassIds}:{})});
   }
   function startCrop(event) {
     if(event.isTrusted!==true || pending || cropping || !ready) return;
@@ -159,7 +190,7 @@
     if(event.source !== window || event.origin !== location.origin) return;
     const message=event.data;
     if(!message || message.channel !== channel || message.from !== "platform") return;
-    if(message.type === "state") {state.textContent=String(message.label || "");ready=message.ready===true;controls();}
+    if(message.type === "state") {state.textContent=String(message.label || "");ready=message.ready===true;renderClasses(message.classes);controls();}
     if(message.type === "done" && pending && (!message.requestId || message.requestId===pending.id)) {
       clearTimeout(timeout);pending=null;feedback.textContent=String(message.message || "");feedback.style.color=message.error ? "#b22" : "#126b62";
       controls();post({type:"hello"});

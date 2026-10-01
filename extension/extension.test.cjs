@@ -192,3 +192,17 @@ test('pointer drawing, moving, resizing and cancellation preserve valid bounds',
   assert.equal(JSON.parse(p.elements.result.textContent).review_status,'confirmed');
   assert.equal(JSON.parse(p.elements.result.textContent).objects[0].x,800);
 });
+
+test('AI background forwards enabled_class_ids and rejects invalid subsets',async()=>{
+  let captured;
+  const send=backend(async(url,options)=>{captured={url,options};return {ok:true,json:async()=>({source:'qwen'})};});
+  const reply=await send({type:'ANNOTATION_AI',image:{...aiImage,enabled_class_ids:[3]}},platformSender);
+  assert.equal(reply.ok,true);
+  assert.deepEqual(JSON.parse(captured.options.body),{...aiImage,enabled_class_ids:[3]});
+  let calls=0;
+  const reject=backend(async()=>{calls++;throw Error('unexpected');});
+  for(const mutation of [{enabled_class_ids:[]},{enabled_class_ids:[7]},{enabled_class_ids:[3,3]}]) {
+    assert.equal((await reject({type:'ANNOTATION_AI',image:{...aiImage,...mutation}},platformSender)).ok,false);
+  }
+  assert.equal(calls,0);
+});

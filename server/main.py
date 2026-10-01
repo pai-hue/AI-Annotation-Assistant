@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from server.ai_service import AIError, AIRequest, MAX_BODY_BYTES, ReferenceRequest, generate_annotations, get_settings, save_reference
 
 
-app = FastAPI(title="AI Annotation Assistant", version="0.4.0")
+app = FastAPI(title="AI Annotation Assistant", version="1.0.0")
 app.mount("/demo", StaticFiles(directory=Path(__file__).parent / "demo", html=True), name="demo")
 
 ImageDimension = Annotated[int, Field(strict=True, gt=0, le=1_000_000)]
