@@ -37,18 +37,22 @@
     post({type:"done",requestId,message,error});
     announce();
   }
-  function captureImage(state) {
+  function captureImage(state, maxSide=1600, crop) {
     if(classes.length>100 || classes.some(name=>name.length>100)) throw Error("目前支持最多 100 个类别，每个类别名最多 100 字符。");
     // Read the original cached image, never the editor canvas with annotation overlays.
     const image=imageCache.get(state.filename);
-    const ratio=Math.min(1,1600/Math.max(state.width,state.height));
+    const sw=crop ? crop.width : state.width;
+    const sh=crop ? crop.height : state.height;
+    const sx=crop ? crop.x : 0;
+    const sy=crop ? crop.y : 0;
+    const ratio=Math.min(1,maxSide/Math.max(sw,sh));
     const capture=document.createElement("canvas");
-    capture.width=Math.max(1,Math.round(state.width*ratio));
-    capture.height=Math.max(1,Math.round(state.height*ratio));
+    capture.width=Math.max(1,Math.round(sw*ratio));
+    capture.height=Math.max(1,Math.round(sh*ratio));
     const context=capture.getContext("2d");
     if(!context) throw Error("无法读取图片，请刷新网页后重试。");
     context.fillStyle="#fff";context.fillRect(0,0,capture.width,capture.height);
-    context.drawImage(image,0,0,capture.width,capture.height);
+    context.drawImage(image,sx,sy,sw,sh,0,0,capture.width,capture.height);
     let encoded;
     try {encoded=capture.toDataURL("image/jpeg",0.85);} catch {throw Error("原网站限制了图片读取，暂时无法发送此图片。");}
     if(!encoded.startsWith("data:image/jpeg;base64,") || encoded.length>2796236) throw Error("图片编码失败或超过 2 MiB，请改用较小测试图片。");
@@ -64,18 +68,30 @@
       if(pending) return;
       if(typeof message.requestId !== "string" || message.requestId.length > 100 || !message.requestId) return;
       const mode=message.mode || "mock";
-      if(!["mock","ai"].includes(mode)) return;
+      if(!["mock","ai","reference"].includes(mode)) return;
       try {
         const state=snapshot();
         const image={image_id:message.requestId,image_width:state.width,image_height:state.height};
         pending={state,image,mode,requestId:message.requestId,timer:setTimeout(()=>finish("请求超时，请检查本机服务后重试。",true),30000)};
         announce();
-        const payload=mode==="ai" ? {...image,...captureImage(state)} : image;
+        let payload;
+        if(mode==="ai") payload={...image,...captureImage(state)};
+        else if(mode==="reference") {
+          const c=message.crop;
+          if(!c || ![c.x,c.y,c.width,c.height].every(Number.isFinite) || c.x<0 || c.y<0 || c.width<=0 || c.height<=0 ||
+             c.x+c.width>state.width || c.y+c.height>state.height) throw Error("请先在图片上框选要采集的示例区域。");
+          payload={...image,...captureImage(state,640,{x:c.x,y:c.y,width:c.width,height:c.height}),class_id:state.classId,class_name:state.className};
+        } else payload=image;
         post({type:"request",requestId:message.requestId,mode,image:payload});
       } catch(error) { finish(error.message,true); }
       return;
     }
     if(message.type !== "result" || !pending || message.requestId !== pending.requestId) return;
+    if(pending.mode === "reference") {
+      if(message.response?.ok !== true) { finish(message.response?.error || "保存示例失败，请重试。", true); }
+      else { finish(`已保存「${pending.state.className}」的示例图，后续 AI 预标注会自动带上。`); }
+      return;
+    }
     try {
       const current=snapshot();
       if(JSON.stringify(current) !== JSON.stringify(pending.state)) throw Error("图片或类别已变化，本次结果已丢弃。请重新点击。");

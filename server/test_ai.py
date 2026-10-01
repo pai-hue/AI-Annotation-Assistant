@@ -5,6 +5,8 @@ import base64
 from io import BytesIO
 import json
 import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -14,8 +16,10 @@ from PIL import Image
 from pydantic import ValidationError
 
 from server.ai_service import (
-    AIError, AIRequest, MAX_BODY_BYTES, Settings, convert_response,
-    generate_annotations, get_settings, validate_image,
+    AIError, AIRequest, MAX_BODY_BYTES, ProjectClass, ReferenceRequest,
+    REFERENCES_DIR, Settings, build_payload, convert_response,
+    generate_annotations, get_settings, load_references, project_key,
+    save_reference, validate_image,
 )
 from server.main import app
 
@@ -54,6 +58,13 @@ class SettingsTests(unittest.TestCase):
 
 
 class ModelTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._refs = patch("server.ai_service.REFERENCES_DIR", Path(self._tmp.name))
+        self._refs.start()
+        self.addCleanup(self._refs.stop)
+
     async def test_real_wire_contract_and_original_pixels(self):
         captured = []
 
@@ -81,6 +92,19 @@ class ModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["objects"], [dict(id="ai-1", class_id=9, class_name="part", x=10, y=20, width=50, height=40)])
         self.assertEqual(result["source"], "qwen")
         self.assertNotIn("review_status", result)
+
+    async def test_adjacent_same_class_instances_remain_separate(self):
+        values = sample()
+        values["classes"] = [dict(id=9, name="黑色板件")]
+        objects = [dict(class_id=9, xmin=100, ymin=250, xmax=400, ymax=750),
+                   dict(class_id=9, xmin=400, ymin=250, xmax=700, ymax=750)]
+        result = await generate_annotations(
+            AIRequest(**values), Settings("fake-test-key"),
+            transport=httpx.MockTransport(lambda _: httpx.Response(200, json=model_reply(objects))))
+        self.assertEqual(result["objects"], [
+            dict(id="ai-1", class_id=9, class_name="黑色板件", x=10, y=20, width=30, height=40),
+            dict(id="ai-2", class_id=9, class_name="黑色板件", x=40, y=20, width=30, height=40),
+        ])
 
     async def test_provider_failures_are_sanitized_and_never_retried(self):
         for status, code in [(400, "provider_request"), (401, "invalid_key"), (402, "quota_or_rate_limit"), (403, "access_denied"), (404, "model_unavailable"),
@@ -200,6 +224,11 @@ class EndpointTests(unittest.TestCase):
         self.settings.start()
         self.addCleanup(self.settings.stop)
         self.addCleanup(self.client.close)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._refs = patch("server.ai_service.REFERENCES_DIR", Path(self._tmp.name))
+        self._refs.start()
+        self.addCleanup(self._refs.stop)
 
     def test_status_is_configuration_presence_only_and_missing_key_is_actionable(self):
         self.assertEqual(self.client.get("/api/ai/status").json(), dict(provider="qwen", model="qwen3-vl-flash", configured=False))
@@ -230,6 +259,69 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["source"], "qwen")
         self.assertEqual(response.json()["objects"][0]["class_id"], 9)
+
+
+class ReferenceTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.refs = Path(self.tmp.name)
+        self.client = TestClient(app)
+        self.addCleanup(self.client.close)
+
+    def _reference(self, **overrides):
+        buffer = BytesIO()
+        Image.new("RGB", (320, 240), (10, 20, 30)).save(buffer, format="JPEG")
+        payload = dict(classes=[dict(id=3, name="工件"), dict(id=9, name="part")],
+                       class_id=9, input_width=320, input_height=240,
+                       image_data_url="data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode())
+        payload.update(overrides)
+        return payload
+
+    def test_project_key_is_order_independent(self):
+        a = [ProjectClass(id=3, name="工件"), ProjectClass(id=9, name="part")]
+        b = [ProjectClass(id=9, name="part"), ProjectClass(id=3, name="工件")]
+        self.assertEqual(project_key(a), project_key(b))
+        self.assertNotEqual(project_key(a), project_key([ProjectClass(id=3, name="工件")]))
+
+    def test_save_and_load_references_roundtrip(self):
+        request = ReferenceRequest(**self._reference())
+        with patch("server.ai_service.REFERENCES_DIR", self.refs):
+            save_reference(request)
+            loaded = load_references(request.classes)
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0]["class_id"], 9)
+        self.assertEqual(loaded[0]["class_name"], "part")
+        self.assertTrue(loaded[0]["data_url"].startswith("data:image/jpeg;base64,"))
+
+    def test_build_payload_adds_references_only_when_present(self):
+        request = AIRequest(**sample())
+        without = build_payload(request, "qwen3-vl-flash")
+        self.assertEqual(without["messages"][1]["content"][0],
+                         {"type": "image_url", "image_url": {"url": request.image_data_url}})
+        refs = [{"class_id": 3, "class_name": "工件", "data_url": "data:image/jpeg;base64,AAAA"}]
+        with_refs = build_payload(request, "qwen3-vl-flash", refs)
+        content = with_refs["messages"][1]["content"]
+        self.assertEqual(content[0]["type"], "text")
+        self.assertIn("示例图", content[0]["text"])
+        self.assertEqual(content[1]["type"], "image_url")
+        self.assertEqual(content[-2]["image_url"]["url"], request.image_data_url)
+        self.assertIn("所有可见实例", content[-1]["text"])
+
+    def test_reference_endpoint_saves_and_rejects_bad_input(self):
+        payload = self._reference()
+        with patch("server.ai_service.REFERENCES_DIR", self.refs):
+            ok = self.client.post("/api/references", json=payload, headers={"Origin": "chrome-extension://test"})
+            self.assertEqual(ok.status_code, 200)
+            self.assertEqual(ok.json(), {"ok": True})
+            bad = self._reference(class_id=7)
+            self.assertEqual(self.client.post("/api/references", json=bad,
+                                              headers={"Origin": "chrome-extension://test"}).status_code, 422)
+            extra = self._reference(image_id="unexpected")
+            self.assertEqual(self.client.post("/api/references", json=extra,
+                                              headers={"Origin": "chrome-extension://test"}).status_code, 422)
+            self.assertEqual(self.client.post("/api/references", json=payload,
+                                              headers={"Origin": "https://untrusted.example"}).status_code, 403)
 
 
 if __name__ == "__main__":

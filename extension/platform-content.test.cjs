@@ -6,9 +6,10 @@ const path=require('node:path');
 
 function panel() {
   const elements=[],posted=[],requests=[],listeners={};
+  const canvasEl={tag:'canvas',width:1000,height:800,getBoundingClientRect:()=>({left:0,top:0,width:500,height:400})};
   const element=tag=>{
     const node={tag,children:[],listeners:{},style:{setProperty(name,value){this[name]=value;}},checked:false,append(...items){this.children.push(...items);},
-      attachShadow(){return element('shadow');},setAttribute(){},
+      attachShadow(){return element('shadow');},setAttribute(){},remove(){},
       getBoundingClientRect(){return {left:250,top:0,width:330,height:120};},setPointerCapture(){},
       addEventListener(type,fn){this.listeners[type]=fn;}};
     elements.push(node);return node;
@@ -16,19 +17,20 @@ function panel() {
   const origin='https://www.threetone.com.cn';
   const window={innerWidth:1280,innerHeight:800,addEventListener(type,fn){listeners[type]=fn;},postMessage(message){posted.push(message);}};
   const context=vm.createContext({window,location:{origin,pathname:'/train/annotation/demo/editor'},
-    document:{body:element('body'),getElementById:()=>null,createElement:element},
+    document:{body:element('body'),getElementById:()=>null,createElement:element,querySelector:sel=>sel==='#editorCanvas'?canvasEl:null},
     setTimeout,clearTimeout,setInterval:()=>0,clearInterval(){},crypto:require('node:crypto').webcrypto,
     chrome:{runtime:{sendMessage(message,callback){requests.push({message,callback});}}}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'platform-content.js'),'utf8'),context);
   const receive=data=>listeners.message({source:window,origin,data:{channel:'aaa-deepdata-v1',from:'platform',...data}});
   return {elements,posted,requests,receive,ai:elements.find(e=>e.textContent==='预标注'),
-    mock:elements.find(e=>e.textContent==='模拟测试'),consent:elements.find(e=>e.tag==='input'),
+    mock:elements.find(e=>e.textContent==='模拟测试'),ref:elements.find(e=>e.textContent==='采集示例'),
+    consent:elements.find(e=>e.tag==='input'),
     keydown:event=>listeners.keydown(event),cleanup:()=>listeners.pagehide()};
 }
 
 test('AI requires explicit consent and a trusted click, and never starts from page messages',t=>{
   const p=panel();t.after(p.cleanup);
-  assert.ok(p.elements.some(e=>e.textContent==='允许将当前图片及项目类别发送到阿里云百炼'));
+  assert.ok(p.elements.some(e=>e.textContent==='允许将当前图片、示例图及项目类别发送到阿里云百炼'));
   p.receive({type:'state',ready:true});
   assert.equal(p.ai.disabled,true);assert.equal(p.mock.disabled,false);
   p.ai.listeners.click({isTrusted:true});
@@ -108,4 +110,41 @@ test('Enter shortcut starts an AI request and is ignored on repeats, wrong keys 
   const begin=p.posted.at(-1);
   assert.equal(begin.type,'begin');
   assert.equal(begin.mode,'ai');
+});
+
+test('capture-example enters crop mode and sends reference only after confirming a selection',()=>{
+  const p=panel();p.receive({type:'state',ready:true});
+  assert.equal(p.ref.disabled,false);
+  p.ref.listeners.click({isTrusted:true});
+  assert.equal(p.posted.some(m=>m.type==='begin'),false);
+  assert.equal(p.ref.disabled,true);
+  const view=p.elements.find(e=>e.id==='aaa-crop-view');
+  const ok=p.elements.find(e=>e.textContent==='确认');
+  assert.ok(view);assert.ok(ok);assert.equal(ok.disabled,true);
+  view.listeners.pointerdown({button:0,pointerId:1,clientX:50,clientY:40,preventDefault(){},stopPropagation(){}});
+  view.listeners.pointermove({clientX:250,clientY:240});
+  view.listeners.pointerup();
+  assert.equal(ok.disabled,false);
+  ok.listeners.click({isTrusted:true});
+  const begin=p.posted.findLast(m=>m.type==='begin');
+  assert.equal(begin.mode,'reference');
+  assert.deepEqual(JSON.parse(JSON.stringify(begin.crop)),{x:100,y:80,width:400,height:400});
+  p.receive({type:'request',requestId:begin.requestId,mode:'reference',image:{image_id:begin.requestId}});
+  assert.equal(p.requests.length,1);
+  assert.equal(p.requests[0].message.type,'REFERENCE_CAPTURE');
+  p.requests[0].callback({ok:true});
+  assert.equal(p.posted.at(-1).type,'result');
+  p.receive({type:'done',requestId:begin.requestId,message:'saved'});
+  assert.equal(p.ref.disabled,false);
+});
+
+test('capture-example cancel exits crop mode without sending',()=>{
+  const p=panel();p.receive({type:'state',ready:true});
+  p.ref.listeners.click({isTrusted:true});
+  assert.equal(p.posted.some(m=>m.type==='begin'),false);
+  assert.equal(p.ref.disabled,true);
+  const cancel=p.elements.find(e=>e.textContent==='取消');
+  cancel.listeners.click({isTrusted:true});
+  assert.equal(p.posted.some(m=>m.type==='begin'),false);
+  assert.equal(p.ref.disabled,false);
 });

@@ -1,8 +1,21 @@
 {
   "manifest_version": 3,
-  "name": "AI Annotation Assistant",
+  "name": "FramePilot",
   "version": "0.4.0",
   "description": "生成 AI 初始标注，写入原网站供人工修改和审核。",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "FramePilot"
+  },
   "host_permissions": ["http://127.0.0.1/*"],
   "background": {"service_worker": "background.js"},
   "content_scripts": [{

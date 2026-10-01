@@ -15,20 +15,23 @@
   const AI_SHORTCUT={key:"Enter",ctrlKey:false,altKey:false,metaKey:false,shiftKey:false};
   const aiButton=document.createElement("button");aiButton.textContent="预标注";aiButton.disabled=true;aiButton.title="快捷键 Enter";
   const mockButton=document.createElement("button");mockButton.textContent="模拟测试";mockButton.className="secondary";mockButton.disabled=true;
+  const refButton=document.createElement("button");refButton.textContent="采集示例";refButton.className="secondary";refButton.disabled=true;refButton.title="框选图片中的区域，设为当前所选类别的示例图";
   const consentLabel=document.createElement("label");
   const consent=document.createElement("input");consent.type="checkbox";
-  const consentText=document.createElement("span");consentText.textContent="允许将当前图片及项目类别发送到阿里云百炼";
+  const consentText=document.createElement("span");consentText.textContent="允许将当前图片、示例图及项目类别发送到阿里云百炼";
   consentLabel.append(consent,consentText);
   const state=document.createElement("p");state.textContent="正在连接原网站标注器…";
   const feedback=document.createElement("p");feedback.setAttribute("role","status");
   const resize=document.createElement("div");resize.className="resize-handle";resize.title="拖动调整面板大小";
-  panel.append(header,aiButton,mockButton,consentLabel,state,feedback,resize);shadow.append(style,panel);document.body.append(host);
-  let pending=null,timeout=null,ready=false;
+  panel.append(header,aiButton,mockButton,refButton,consentLabel,state,feedback,resize);shadow.append(style,panel);document.body.append(host);
+  let pending=null,timeout=null,ready=false,cropping=null;
   const post=data=>window.postMessage({channel,from:"extension",...data},location.origin);
   function controls() {
-    mockButton.disabled=!!pending || !ready;
-    aiButton.disabled=!!pending || !ready || !consent.checked;
-    consent.disabled=!!pending;
+    const locked=!!pending || !!cropping;
+    mockButton.disabled=locked || !ready;
+    refButton.disabled=locked || !ready;
+    aiButton.disabled=locked || !ready || !consent.checked;
+    consent.disabled=locked;
   }
   let drag=null;
   header.addEventListener("pointerdown",event=>{
@@ -70,16 +73,75 @@
   resize.addEventListener("pointerup",endResize);
   resize.addEventListener("pointercancel",endResize);
   consent.addEventListener("change",controls);
-  function begin(mode,event) {
+  function begin(mode,event,crop) {
     // Page bridge messages alone cannot initiate a paid request.
     if(event.isTrusted!==true || pending || !ready || (mode==="ai" && !consent.checked)) return;
     pending={id:crypto.randomUUID(),mode,sent:false};controls();
     feedback.style.color="#126b62";
-    feedback.textContent=mode==="ai" ? "千问正在生成初始框，请保持当前图片和类别不变…" : "正在请求本机模拟服务…";
+    feedback.textContent=mode==="ai" ? "千问正在生成初始框，请保持当前图片和类别不变…" : mode==="reference" ? "正在保存示例图…" : "正在请求本机模拟服务…";
     timeout=setTimeout(()=>{pending=null;feedback.textContent="连接超时，请刷新网页后重试。";controls();post({type:"hello"});},32000);
-    post({type:"begin",requestId:pending.id,mode});
+    post({type:"begin",requestId:pending.id,mode,crop});
+  }
+  function startCrop(event) {
+    if(event.isTrusted!==true || pending || cropping || !ready) return;
+    const canvas=document.querySelector("#editorCanvas");
+    if(!canvas || typeof canvas.getBoundingClientRect!=="function" || !canvas.width || !canvas.height){
+      feedback.textContent="未找到原网站画布，无法框选示例区域。";feedback.style.color="#b22";return;
+    }
+    const rect=canvas.getBoundingClientRect();
+    if(rect.width<=0 || rect.height<=0){feedback.textContent="画布尺寸异常，无法框选。";feedback.style.color="#b22";return;}
+    cropping={canvas,rect};
+    controls();
+    const shield=document.createElement("div");shield.id="aaa-crop-overlay";
+    shield.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100000";
+    const view=document.createElement("div");view.id="aaa-crop-view";
+    view.style.cssText="position:fixed;box-sizing:border-box;border:2px dashed #fff;touch-action:none";
+    view.style.left=rect.left+"px";view.style.top=rect.top+"px";view.style.width=rect.width+"px";view.style.height=rect.height+"px";
+    const sel=document.createElement("div");sel.id="aaa-crop-sel";
+    sel.style.cssText="position:absolute;display:none;box-sizing:border-box;background:rgba(18,107,98,.3);border:2px solid #126b62";
+    const bar=document.createElement("div");
+    bar.style.cssText="position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:100001;display:flex;gap:8px;align-items:center;background:#fff;color:#173c38;padding:8px 12px;border-radius:8px;font-family:'Segoe UI',sans-serif;font-size:13px;box-shadow:0 3px 20px #0003";
+    const hint=document.createElement("span");hint.textContent="拖动框选要采集的示例区域（保存为当前所选类别）";
+    const ok=document.createElement("button");ok.textContent="确认";ok.disabled=true;
+    ok.style.cssText="font:13px 'Segoe UI',sans-serif;background:#126b62;color:#fff;border:0;border-radius:6px;padding:6px 14px;cursor:pointer";
+    const cancel=document.createElement("button");cancel.textContent="取消";
+    cancel.style.cssText=ok.style.cssText+";background:#e7efed;color:#28534b";
+    bar.append(hint,ok,cancel);view.append(sel);shield.append(view,bar);document.body.append(shield);
+    let drag=null,selRect=null;
+    function close(){shield.remove();cropping=null;controls();}
+    view.addEventListener("pointerdown",e=>{
+      if(e.button!==0) return;
+      e.preventDefault();e.stopPropagation();
+      const r=canvas.getBoundingClientRect();
+      view.style.left=r.left+"px";view.style.top=r.top+"px";view.style.width=r.width+"px";view.style.height=r.height+"px";
+      cropping.rect=r;
+      drag={startX:e.clientX,startY:e.clientY,left:r.left,top:r.top,width:r.width,height:r.height};
+      view.setPointerCapture(e.pointerId);
+    });
+    view.addEventListener("pointermove",e=>{
+      if(!drag) return;
+      const x1=Math.min(drag.startX,e.clientX)-drag.left, y1=Math.min(drag.startY,e.clientY)-drag.top;
+      const x2=Math.max(drag.startX,e.clientX)-drag.left, y2=Math.max(drag.startY,e.clientY)-drag.top;
+      const left=Math.max(0,x1), top=Math.max(0,y1), right=Math.min(drag.width,x2), bottom=Math.min(drag.height,y2);
+      if(right-left<1 || bottom-top<1){sel.style.display="none";selRect=null;ok.disabled=true;return;}
+      selRect={left,top,right,bottom};
+      sel.style.display="block";sel.style.left=left+"px";sel.style.top=top+"px";
+      sel.style.width=(right-left)+"px";sel.style.height=(bottom-top)+"px";ok.disabled=false;
+    });
+    view.addEventListener("pointerup",()=>{drag=null;});
+    view.addEventListener("pointercancel",()=>{drag=null;});
+    cancel.addEventListener("click",()=>close());
+    ok.addEventListener("click",e=>{
+      if(!selRect) return;
+      const sx=canvas.width/cropping.rect.width, sy=canvas.height/cropping.rect.height;
+      const crop={x:Math.round(selRect.left*sx),y:Math.round(selRect.top*sy),
+        width:Math.round((selRect.right-selRect.left)*sx),height:Math.round((selRect.bottom-selRect.top)*sy)};
+      close();
+      begin("reference",e,crop);
+    });
   }
   mockButton.addEventListener("click",event=>begin("mock",event));
+  refButton.addEventListener("click",event=>startCrop(event));
   aiButton.addEventListener("click",event=>begin("ai",event));
   window.addEventListener("keydown",event=>{
     if(event.repeat || !event.isTrusted) return;
@@ -106,7 +168,8 @@
     pending.sent=true;
     const requestId=pending.id;
     try {
-      chrome.runtime.sendMessage({type:pending.mode==="ai"?"ANNOTATION_AI":"ANNOTATION_MOCK",image:message.image},response=>{
+      const msgType=pending.mode==="ai"?"ANNOTATION_AI":pending.mode==="reference"?"REFERENCE_CAPTURE":"ANNOTATION_MOCK";
+      chrome.runtime.sendMessage({type:msgType,image:message.image},response=>{
         const error=chrome.runtime.lastError;
         if(requestId !== pending?.id) return;
         post({type:"result",requestId,response:error?{ok:false,error:"扩展连接已失效，请刷新页面。"}:response});

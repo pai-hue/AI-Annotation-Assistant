@@ -69,6 +69,22 @@ test('AI configuration errors remain actionable and unrelated error bodies are h
   const bad=backend(async()=>({ok:false,status:502,json:async()=>({detail:'sensitive provider text'})}));
   assert.doesNotMatch((await bad({type:'ANNOTATION_AI',image:aiImage},platformSender)).error,/sensitive/);
 });
+
+const refImage={...image,input_width:640,input_height:512,image_data_url:'data:image/jpeg;base64,AAAA',classes:[{id:3,name:'part'},{id:9,name:'工件'}],class_id:9};
+const refBody={input_width:640,input_height:512,image_data_url:'data:image/jpeg;base64,AAAA',classes:[{id:3,name:'part'},{id:9,name:'工件'}],class_id:9};
+test('REFERENCE_CAPTURE forwards to /api/references and rejects unknown class or oversized input',async()=>{
+  let captured;
+  const send=backend(async(url,options)=>{captured={url,options};return {ok:true,json:async()=>({ok:true})};});
+  const reply=await send({type:'REFERENCE_CAPTURE',image:refImage},platformSender);
+  assert.equal(reply.ok,true);
+  assert.equal(captured.url,'http://127.0.0.1:8000/api/references');
+  assert.deepEqual(JSON.parse(captured.options.body),refBody);
+  let calls=0;
+  const reject=backend(async()=>{calls++;throw Error('unexpected');});
+  assert.equal((await reject({type:'REFERENCE_CAPTURE',image:{...refImage,class_id:7}},platformSender)).ok,false);
+  assert.equal((await reject({type:'REFERENCE_CAPTURE',image:{...refImage,input_width:641}},platformSender)).ok,false);
+  assert.equal(calls,0);
+});
 function element() {
   return {disabled:false,hidden:false,dataset:{},style:{},children:[],listeners:{},textContent:'',
     value:'',getBoundingClientRect(){return {left:0,top:0,width:1000,height:800};},

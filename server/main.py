@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
-from server.ai_service import AIError, AIRequest, MAX_BODY_BYTES, generate_annotations, get_settings
+from server.ai_service import AIError, AIRequest, MAX_BODY_BYTES, ReferenceRequest, generate_annotations, get_settings, save_reference
 
 
 app = FastAPI(title="AI Annotation Assistant", version="0.4.0")
@@ -95,5 +95,29 @@ async def ai_annotations(request: Request):
         return JSONResponse({"code": "invalid_request", "detail": "图片参数或类别表无效，请刷新页面重新选择。"}, status_code=422)
     try:
         return await generate_annotations(payload, get_settings())
+    except AIError as error:
+        return JSONResponse({"code": error.code, "detail": error.message}, status_code=error.status)
+
+
+@app.post("/api/references")
+async def save_reference_endpoint(request: Request):
+    """Store one category example image locally, keyed by the project's class table."""
+    origin = request.headers.get("origin", "")
+    if origin and not (origin.startswith("chrome-extension://") and len(origin.split("/")) == 3):
+        return JSONResponse({"code": "invalid_origin", "detail": "请通过 Edge 扩展采集示例图。"}, status_code=403)
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+        return JSONResponse({"code": "invalid_content_type", "detail": "需要 application/json。"}, status_code=415)
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_BODY_BYTES:
+            return JSONResponse({"code": "image_too_large", "detail": "示例图片过大。"}, status_code=413)
+        body.extend(chunk)
+    try:
+        payload = ReferenceRequest.model_validate_json(body)
+    except ValueError:
+        return JSONResponse({"code": "invalid_request", "detail": "示例图参数或类别表无效，请刷新页面重新选择。"}, status_code=422)
+    try:
+        save_reference(payload)
+        return {"ok": True}
     except AIError as error:
         return JSONResponse({"code": error.code, "detail": error.message}, status_code=error.status)

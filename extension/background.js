@@ -2,6 +2,7 @@
 // Never accept a request URL from the page: the backend is fixed.
 const API_URL = "http://127.0.0.1:8000/api/annotations/mock";
 const AI_URL = "http://127.0.0.1:8000/api/annotations/ai";
+const REFERENCE_URL = "http://127.0.0.1:8000/api/references";
 const MAX_DATA_URL = 2796236; // 2 MiB image, base64 + data-URL prefix.
 function allowedSender(sender) {
   try {
@@ -27,38 +28,66 @@ function validAIImage(image) {
     ids.add(c.id);return true;
   });
 }
+function validReferenceImage(image) {
+  if (!validImage(image) || ![image.input_width,image.input_height].every(n=>Number.isInteger(n) && n>0 && n<=640) ||
+      typeof image.image_data_url !== "string" || image.image_data_url.length > MAX_DATA_URL ||
+      !/^data:image\/(jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$/.test(image.image_data_url) ||
+      !Array.isArray(image.classes) || !image.classes.length || image.classes.length>100) return false;
+  const ids=new Set();
+  const ok=image.classes.every(c=>{
+    if(!c || !Number.isInteger(c.id) || c.id<0 || c.id>1000000 || ids.has(c.id) ||
+        typeof c.name!=="string" || !c.name.trim() || c.name.length>100) return false;
+    ids.add(c.id);return true;
+  });
+  return ok && Number.isInteger(image.class_id) && image.class_id>=0 && ids.has(image.class_id);
+}
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const ai = message?.type === "ANNOTATION_AI";
-  if (!allowedSender(sender) || !["ANNOTATION_MOCK","ANNOTATION_AI"].includes(message?.type) ||
-      !validImage(message.image) || (ai && (!sender.url.startsWith("https://www.threetone.com.cn/") || !validAIImage(message.image)))) {
+  const ref = message?.type === "REFERENCE_CAPTURE";
+  if (!allowedSender(sender) || !["ANNOTATION_MOCK","ANNOTATION_AI","REFERENCE_CAPTURE"].includes(message?.type) ||
+      !validImage(message.image) ||
+      (ai && (!sender.url.startsWith("https://www.threetone.com.cn/") || !validAIImage(message.image))) ||
+      (ref && (!sender.url.startsWith("https://www.threetone.com.cn/") || !validReferenceImage(message.image)))) {
     sendResponse({ok: false, error: "请求来源或图片参数无效。"});
     return false;
   }
-  const {image_id, image_width, image_height} = message.image;
-  const body = {image_id,image_width,image_height};
+  const body = {};
+  if(!ref) {
+    body.image_id = message.image.image_id;
+    body.image_width = message.image.image_width;
+    body.image_height = message.image.image_height;
+  }
   if(ai) {
     body.input_width=message.image.input_width;body.input_height=message.image.input_height;
     body.image_data_url=message.image.image_data_url;
     body.classes=message.image.classes.map(c=>({id:c.id,name:c.name}));
   }
+  if(ref) {
+    body.input_width=message.image.input_width;body.input_height=message.image.input_height;
+    body.image_data_url=message.image.image_data_url;
+    body.classes=message.image.classes.map(c=>({id:c.id,name:c.name}));
+    body.class_id=message.image.class_id;
+  }
+  const url = ref ? REFERENCE_URL : ai ? AI_URL : API_URL;
   const controller = new AbortController();
   // Leave time for the content script to relay the error before the page's 30s timeout.
   const timer = setTimeout(() => controller.abort(), 25000);
   (async () => {
     try {
-      const response = await fetch(ai ? AI_URL : API_URL, {
+      const response = await fetch(url, {
         method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify(body),
         signal: controller.signal, credentials: "omit", redirect: "error",
       });
       if (!response.ok) {
-        if(ai) {
+        if(ai || ref) {
           let data;
           try {data=await response.json();} catch {}
           const knownCodes=["not_configured","invalid_key","access_denied","model_unavailable","quota_or_rate_limit",
             "provider_request","provider_error","timeout","network_error","invalid_model_result","model_refusal",
             "invalid_request","invalid_image","image_too_large","invalid_origin","invalid_content_type"];
-          const detail=knownCodes.includes(data?.code) && typeof data.detail==="string" && data.detail.length<300 ? data.detail : "AI 请求失败，请检查本机服务与模型配置。";
+          const fallback=ref ? "保存示例图失败，请检查本机服务。" : "AI 请求失败，请检查本机服务与模型配置。";
+          const detail=knownCodes.includes(data?.code) && typeof data.detail==="string" && data.detail.length<300 ? data.detail : fallback;
           sendResponse({ok:false,error:detail});return;
         }
         throw new Error(`服务返回 HTTP ${response.status}。`);
