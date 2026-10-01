@@ -5,8 +5,13 @@ const fs=require('node:fs');
 const path=require('node:path');
 function fixture() {
   const messages=[];let listener;
+  const captures=[];
+  const document={createElement:()=>{
+    const capture={width:0,height:0,getContext:()=>({fillRect(){},drawImage(image){capture.source=image;}}),toDataURL:()=> 'data:image/jpeg;base64,AAAA'};
+    captures.push(capture);return capture;
+  }};
   const window={postMessage:data=>messages.push(data),addEventListener:(type,fn)=>{listener=fn;}};
-  const context=vm.createContext({window,location:{origin:'https://www.threetone.com.cn',pathname:'/train/annotation/demo/editor'},setTimeout,clearTimeout});
+  const context=vm.createContext({window,document,location:{origin:'https://www.threetone.com.cn',pathname:'/train/annotation/demo/editor'},setTimeout,clearTimeout});
   vm.runInContext(`
     const projectName='demo';let classes=['workpiece','part'];let currentClassIdx=1;
     let annotations={other:[{x:5}]};let currentImageIdx=0;let isPlaying=false;
@@ -20,9 +25,9 @@ function fixture() {
   vm.runInContext(fs.readFileSync(path.join(__dirname,'platform-main.js'),'utf8'),context);
   const send=data=>listener({source:window,origin:'https://www.threetone.com.cn',data:{channel:'aaa-deepdata-v1',from:'extension',...data}});
   const response=()=>({ok:true,data:{schema_version:'1.0',source:'mock',image_id:'request-1',image_width:1000,image_height:800,objects:[{id:'box-1',class_id:0,class_name:'part_A',x:100,y:80,width:200,height:160}]}});
-  const begin=()=>send({type:'begin',requestId:'request-1'});
+  const begin=(mode='mock')=>send({type:'begin',requestId:'request-1',mode});
   const finish=(value=response())=>send({type:'result',requestId:'request-1',response:value});
-  return {context,messages,send,begin,finish,response,read:code=>vm.runInContext(code,context)};
+  return {context,messages,captures,send,begin,finish,response,read:code=>vm.runInContext(code,context)};
 }
 test('native adapter maps selected class and preserves other images',()=>{
   const p=fixture();p.begin();p.finish();
@@ -63,4 +68,58 @@ test('empty and failed responses do not create data or mark review',()=>{
     assert.equal(p.read('annotations["test.png"]'),undefined);
     assert.equal(p.read('refreshes'),0);
   }
+});
+
+test('AI reads original image without overlays; mock and polls do not capture pixels',()=>{
+  const p=fixture();p.send({type:'hello'});p.begin();p.finish({ok:false,error:'cancel'});
+  assert.equal(p.captures.length,0);
+  p.read('canvas.width=4000;canvas.height=2000;imageCache.get("test.png").naturalWidth=4000;imageCache.get("test.png").naturalHeight=2000;');
+  p.begin('ai');
+  const request=p.messages.findLast(m=>m.type==='request');
+  assert.equal(request.mode,'ai');
+  assert.equal(request.image.input_width,1600);
+  assert.equal(request.image.input_height,800);
+  assert.equal(request.image.image_width,4000);
+  assert.equal(p.captures[0].source,p.read('imageCache.get("test.png")'));
+  assert.deepEqual(JSON.parse(JSON.stringify(request.image.classes)),[{id:0,name:'workpiece'},{id:1,name:'part'}]);
+  assert.equal(request.image.project,undefined);
+  assert.equal(request.image.filename,undefined);
+  p.finish({ok:false,error:'cancel'});
+});
+
+test('AI preserves multiple native class IDs, instead of remapping to selected class',()=>{
+  const p=fixture();p.begin('ai');
+  const response=p.response();response.data.source='qwen';
+  response.data.objects=[{id:'a',class_id:0,class_name:'workpiece',x:1,y:2,width:30,height:40},
+    {id:'b',class_id:1,class_name:'part',x:300,y:200,width:70,height:20}];
+  p.finish(response);
+  assert.deepEqual(JSON.parse(p.read('JSON.stringify(annotations["test.png"].map(b=>b.class_id))')),[0,1]);
+  assert.equal(p.read('annotations.other[0].x'),5);
+});
+
+test('AI rejects unknown/mismatched class, wrong source and stale image before writing',()=>{
+  for(const mutation of ['unknown','name','source','old-provider','image','existing','classes']) {
+    const p=fixture();p.begin('ai');const response=p.response();response.data.source='qwen';
+    response.data.objects[0].class_name='workpiece';
+    if(mutation==='unknown') response.data.objects[0].class_id=9;
+    if(mutation==='name') response.data.objects[0].class_name='renamed';
+    if(mutation==='source') response.data.source='mock';
+    if(mutation==='old-provider') response.data.source='openai';
+    if(mutation==='image') p.read('currentImageIdx=1');
+    if(mutation==='existing') p.read('annotations["test.png"]=[{x:42}]');
+    if(mutation==='classes') p.read('classes.reverse()');
+    p.finish(response);
+    assert.equal(p.read('refreshes'),0);
+    if(mutation==='existing') assert.equal(p.read('annotations["test.png"][0].x'),42);
+    else assert.equal(p.read('annotations["test.png"]'),undefined);
+  }
+});
+
+test('tainted canvas does not send an image and clears busy state',()=>{
+  const p=fixture();
+  p.read('document.createElement=()=>({getContext:()=>({fillRect(){},drawImage(){}}),toDataURL(){throw Error("tainted")}})');
+  p.begin('ai');
+  assert.equal(p.messages.some(m=>m.type==='request'),false);
+  assert.ok(p.messages.some(m=>m.type==='done' && m.error));
+  assert.equal(p.messages.at(-1).ready,true);
 });

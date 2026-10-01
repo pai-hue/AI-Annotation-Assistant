@@ -38,6 +38,37 @@ test('network failure and HTTP errors produce retryable responses',async()=>{
     assert.equal((await backend(fetchImpl)({type:'ANNOTATION_MOCK',image})).ok,false);
   }
 });
+
+const aiImage={...image,input_width:1000,input_height:800,image_data_url:'data:image/jpeg;base64,AAAA',classes:[{id:3,name:'part'}]};
+const platformSender={...sender,url:'https://www.threetone.com.cn/train/annotation/demo/editor'};
+test('AI background forwards only image and classes to fixed local endpoint',async()=>{
+  let captured;
+  const send=backend(async(url,options)=>{captured={url,options};return {ok:true,json:async()=>({source:'qwen'})};});
+  const reply=await send({type:'ANNOTATION_AI',image:{...aiImage,project:'private',filename:'private',url:'https://other.example'}},platformSender);
+  assert.equal(reply.ok,true);
+  assert.equal(captured.url,'http://127.0.0.1:8000/api/annotations/ai');
+  assert.deepEqual(JSON.parse(captured.options.body),aiImage);
+  assert.equal(captured.options.credentials,'omit');
+});
+
+test('AI image validation and origin check prevent forwarding invalid requests',async()=>{
+  let calls=0;
+  const send=backend(async()=>{calls++;throw Error('unexpected');});
+  assert.equal((await send({type:'ANNOTATION_AI',image:aiImage})).ok,false);
+  for(const mutation of [{classes:[]},{classes:[{id:3,name:'a'},{id:3,name:'b'}]},
+    {classes:[{id:0,name:' '}]},{image_data_url:'https://example.com/image.jpg'},
+    {image_data_url:'data:image/jpeg;base64,'+'A'.repeat(2796240)},{input_width:1601}]) {
+    assert.equal((await send({type:'ANNOTATION_AI',image:{...aiImage,...mutation}},platformSender)).ok,false);
+  }
+  assert.equal(calls,0);
+});
+
+test('AI configuration errors remain actionable and unrelated error bodies are hidden',async()=>{
+  const send=backend(async()=>({ok:false,status:503,json:async()=>({code:'not_configured',detail:'请配置 DASHSCOPE_API_KEY'})}));
+  assert.equal((await send({type:'ANNOTATION_AI',image:aiImage},platformSender)).error,'请配置 DASHSCOPE_API_KEY');
+  const bad=backend(async()=>({ok:false,status:502,json:async()=>({detail:'sensitive provider text'})}));
+  assert.doesNotMatch((await bad({type:'ANNOTATION_AI',image:aiImage},platformSender)).error,/sensitive/);
+});
 function element() {
   return {disabled:false,hidden:false,dataset:{},style:{},children:[],listeners:{},textContent:'',
     value:'',getBoundingClientRect(){return {left:0,top:0,width:1000,height:800};},

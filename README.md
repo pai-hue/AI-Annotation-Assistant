@@ -1,24 +1,37 @@
 # AI Annotation Assistant
 
-当前规格为 v0.2：插件仅负责初始标注，人工审核、修改和保存都在原网站完成。已实现本地模拟链路及 DeepData Hub 原网站适配代码；原网站写入仍待 Edge 实测，真实 AI 尚未接入。下方本地编辑/导出功能仅为历史测试工具。
+当前规格为 v0.4：真实模型改为阿里云百炼的通义千问；插件仅负责初始标注，人工审核、修改和保存都在原网站完成。用户已验证模拟框写入、移动/缩放及保存后保留，并在千问版本更新后反馈“目前测试没有发现任何问题”。当前进入小批量流程与效率验证阶段。下方本地编辑/导出功能仅为历史测试工具。
 
-## 原网站模拟预标注（扩展 v0.2.0）
+## 千问预标注（扩展 v0.4.0）
+
+详细操作见 [AI 配置与验收说明](docs/ai-setup.md)。
+
+1. 后端依赖已安装；新环境需要执行 `.\.venv\Scripts\python.exe -m pip install -r server\requirements.txt`。
+2. 将 `.env.example` 复制为根目录 `.env`（若已有则保留），在本机填写北京地域的 `DASHSCOPE_API_KEY`。默认 `QWEN_MODEL=qwen3-vl-flash`。密钥从[阿里云百炼](https://help.aliyun.com/zh/model-studio/get-api-key)获取，不要发到聊天或写入扩展。旧的 `OPENAI_API_KEY` 和 `OPENAI_MODEL` 已不使用。
+3. 保持后端运行，打开 `http://127.0.0.1:8000/api/ai/status`；`configured: true` 仅表示读到了密钥，不验证余额、权限或网络。
+4. Edge 扩展管理页重新加载扩展，确认版本为 `0.4.0`，再刷新原网站。选择一张允许发送给阿里云百炼、尚无标注的测试图片。
+5. 勾选发送提示，点击“千问预标注”。AI 会使用项目全部类别；“模拟测试”仍仅使用网站当前选中类别。
+6. 初始框写入后，在原网站审核和修正，按原网站流程保存。
+
+真实模式把当前图片的缩小 JPEG 副本及类别表经本机服务发送到阿里云百炼的北京地域接口，按 API 用量计费。API 密钥仅在后端。当前图片有框时拒绝执行；切图、类别改变、空结果和模型错误不会覆盖已有标注。23 项 Node 测试及 21 项 Python 测试通过，模型测试使用伪造响应。本轮用户试用反馈已记录；样本量、耗时和异常场景专项结果尚未收集。
+
+## 原网站模拟预标注
 
 1. 保持本机 Python 服务运行。
 2. 在 Edge 的 `edge://extensions/` 找到 AI Annotation Assistant，点击重新加载。如果出现新站点访问提示，核对目标为 `www.threetone.com.cn`。
 3. 刷新原网站 `/train/annotation/项目名/editor` 标注页。
 4. 选择一张没有标注的图片，并在网站类别列表点击一个类别。模拟测试建议选刚添加的 `part`。
-5. 页面左下附近出现“插件：写入模拟初始框”，面板显示当前类别及状态。
+5. 页面左下附近出现“模拟测试”，面板显示当前类别及状态。该按钮不需要勾选 AI 图片发送选项。
 6. 点击后会把固定比例模拟框转换为网站原生框。随后使用网站自带工具调整或删除。
 
 模拟框使用当前选中类别，不是真实识别。插件只向本机服务发送随机请求 ID 和图片尺寸，不发送图片字节、公司项目名或类别名。写入后原网站的自动保存可能把框保存至公司后台；插件不创建数据集、不导出、不确认审核。
 
 已有标注、播放中、原图未加载、类别变化、切图或返回数据非法时拒绝写入。原网站适配依赖当前页面脚本结构，网站更新后如提示不兼容，应重新检查。
 
-验证：14 项 Node 模拟测试和 4 项后端 HTTP 测试通过。原网站 MAIN-world 接入、CSP、按钮显示、原生编辑及网站持久化结果待加载新版扩展验证。
+验证：此前 14 项 Node 模拟测试和 4 项后端 HTTP 测试通过；用户已验证原网站按钮、原生框写入、移动/缩放及保存后保留。请求中切图、类别变更、播放、超时、删除及不同浏览器缩放比例仍需专项现场验收，不能把正常流程通过等同于全部验收完成。
 
 ```powershell
-node --test extension/extension.test.cjs extension/platform.test.cjs
+node --test extension/extension.test.cjs extension/platform.test.cjs extension/platform-content.test.cjs
 ```
 
 ## 启动后端
@@ -52,7 +65,7 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/annotations/mock' -Method Post
 ## 自动验证
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest server.test_api -v
+.\.venv\Scripts\python.exe -m unittest server.test_api server.test_ai -v
 ```
 
 测试会在临时本地端口启动真实 HTTP 服务，并在完成后停止该测试服务。
@@ -82,7 +95,7 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/annotations/mock' -Method Post
 
 扩展注入按钮 → 网页锁定当前图片 → content script → background service worker → 固定本机接口 → 网页校验结果并显示框。
 
-网页与 content script 使用带版本号的 postMessage 协议，检查来源、消息类型和请求 ID；后台检查扩展来源、主框架和图片参数。页面消息不是可信的身份认证，后台不会接受页面指定的 URL 或任意请求头。当前仅处理无密钥的本机模拟接口。
+网页与 content script 使用带版本号的 postMessage 协议，检查来源、消息类型和请求 ID；后台检查扩展来源、主框架和图片参数。页面消息不是可信的身份认证，后台不会接受页面指定的 URL 或任意请求头。真实模式还需要插件面板中的人工点击和发送勾选；模型密钥只留在后端，后台只连接固定本机接口。
 
 请求最长等待 30 秒，后台网络等待 25 秒。切换图片后旧结果被丢弃。已有框时两种生成按钮都不可用，先清空才可重新生成。
 
