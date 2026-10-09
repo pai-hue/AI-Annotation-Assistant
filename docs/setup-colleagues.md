@@ -8,6 +8,15 @@
 - 已能登录原网站标注平台，并有目标标注项目的访问权限。
 - 能正常访问阿里云百炼（申请密钥和调用模型用）。
 
+## 隐私与数据安全（使用前必读）
+
+点「预标注」后，插件会把**当前图片缩小后的副本**（最长边 1600px 的 JPEG）、**项目类别名**，以及你采集过的**示例图**，经本机服务发送到阿里云百炼（北京地域）调用通义千问识别。这属于把图片数据交给第三方云平台，使用前请确认：
+
+- 图片内容允许外发：涉及人脸、身份证、客户隐私、未公开商业机密或受监管数据时，先走公司数据安全 / 合规审批。
+- 阿里云百炼的数据处理条款（是否用于训练、存储与删除机制），以你所用账号 / 业务空间的实际协议为准。
+
+不会发送到阿里云百炼：API 密钥（只留在本机 `.env`）、项目名、文件名、用户账号。「模拟测试」不发送图片。项目名仅发送到本机服务（127.0.0.1），用于本地示例图按项目隔离存放，不会被转发给千问。
+
 ## 1. 准备文件
 
 向每位同事发送项目文件夹 `AI-Annotation-Assistant`，但**不要**包含：
@@ -15,6 +24,10 @@
 - `.venv`（本机虚拟环境，路径绑定，别人机器上不能用）
 - `.env`（你自己的密钥，绝不外发）
 - `.git`（可选）
+- `server/references/`（你自己采集的示例图，属于个人用户数据，不随项目共享）
+- 真实图片、日志、临时文件及其他任何个人或公司数据
+
+需要保留并一起发送：`extension/`（含图标）、`server/`（源码与 `requirements.txt`、`demo/`）、`docs/`、`setup.bat` 和 `.env.example`。**注意 `.gitignore` 只影响 Git 提交，不会过滤手动打包的 zip**，打包前请手动确认上面这些目录和文件没有被打进去。
 
 建议直接把文件夹压缩成 zip 后发送。解压路径尽量使用**纯英文且无空格**（例如 `D:\AI-Annotation-Assistant`），避免中文或空格路径带来的问题。
 
@@ -45,10 +58,10 @@
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r server\requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn server.main:app --host 127.0.0.1 --port 8000 --reload
+.\.venv\Scripts\python.exe -m uvicorn server.main:app --host 127.0.0.1 --port 18000 --reload
 ```
 
-启动成功后，浏览器打开 http://127.0.0.1:8000/api/ai/status ，应显示：
+启动成功后，浏览器打开 http://127.0.0.1:18000/api/ai/status ，应显示：
 
 ```json
 {"provider":"qwen","model":"qwen3-vl-flash","configured":true}

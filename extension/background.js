@@ -1,13 +1,13 @@
 "use strict";
 // Never accept a request URL from the page: the backend is fixed.
-const API_URL = "http://127.0.0.1:8000/api/annotations/mock";
-const AI_URL = "http://127.0.0.1:8000/api/annotations/ai";
-const REFERENCE_URL = "http://127.0.0.1:8000/api/references";
+const API_URL = "http://127.0.0.1:18000/api/annotations/mock";
+const AI_URL = "http://127.0.0.1:18000/api/annotations/ai";
+const REFERENCE_URL = "http://127.0.0.1:18000/api/references";
 const MAX_DATA_URL = 2796236; // 2 MiB image, base64 + data-URL prefix.
 function allowedSender(sender) {
   try {
     const url = new URL(sender.url);
-    const local = url.origin === "http://127.0.0.1:8000" && url.pathname.startsWith("/demo/");
+    const local = url.origin === "http://127.0.0.1:18000" && url.pathname.startsWith("/demo/");
     const platform = url.origin === "https://www.threetone.com.cn" && /^\/train\/annotation\/[^/]+\/editor$/.test(url.pathname);
     return sender.id === chrome.runtime.id && sender.frameId === 0 && (local || platform);
   } catch { return false; }
@@ -16,8 +16,11 @@ function validImage(image) {
   return image && typeof image.image_id === "string" && image.image_id.trim().length > 0 && image.image_id.length <= 256 &&
     [image.image_width, image.image_height].every(n => Number.isInteger(n) && n > 0 && n <= 1000000);
 }
+function validProjectId(image) {
+  return typeof image.project_id === "string" && image.project_id.trim().length > 0 && image.project_id.length <= 200;
+}
 function validAIImage(image) {
-  if (!validImage(image) || ![image.input_width,image.input_height].every(n=>Number.isInteger(n) && n>0 && n<=1600) ||
+  if (!validImage(image) || !validProjectId(image) || ![image.input_width,image.input_height].every(n=>Number.isInteger(n) && n>0 && n<=1600) ||
       typeof image.image_data_url !== "string" || image.image_data_url.length > MAX_DATA_URL ||
       !/^data:image\/(jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$/.test(image.image_data_url) ||
       !Array.isArray(image.classes) || !image.classes.length || image.classes.length>100) return false;
@@ -34,7 +37,7 @@ function validAIImage(image) {
   return true;
 }
 function validReferenceImage(image) {
-  if (!validImage(image) || ![image.input_width,image.input_height].every(n=>Number.isInteger(n) && n>0 && n<=640) ||
+  if (!validImage(image) || !validProjectId(image) || ![image.input_width,image.input_height].every(n=>Number.isInteger(n) && n>0 && n<=640) ||
       typeof image.image_data_url !== "string" || image.image_data_url.length > MAX_DATA_URL ||
       !/^data:image\/(jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$/.test(image.image_data_url) ||
       !Array.isArray(image.classes) || !image.classes.length || image.classes.length>100) return false;
@@ -66,6 +69,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     body.input_width=message.image.input_width;body.input_height=message.image.input_height;
     body.image_data_url=message.image.image_data_url;
     body.classes=message.image.classes.map(c=>({id:c.id,name:c.name}));
+    body.project_id=message.image.project_id;
     if(message.image.enabled_class_ids !== undefined) body.enabled_class_ids=message.image.enabled_class_ids;
   }
   if(ref) {
@@ -73,6 +77,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     body.image_data_url=message.image.image_data_url;
     body.classes=message.image.classes.map(c=>({id:c.id,name:c.name}));
     body.class_id=message.image.class_id;
+    body.project_id=message.image.project_id;
   }
   const url = ref ? REFERENCE_URL : ai ? AI_URL : API_URL;
   const controller = new AbortController();

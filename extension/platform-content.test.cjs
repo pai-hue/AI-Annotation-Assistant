@@ -174,3 +174,58 @@ test('category squares toggle and AI begin sends only enabled class ids',t=>{
   p.ai.listeners.click({isTrusted:true});
   assert.equal(p.posted.filter(m=>m.type==='begin').length,before);
 });
+
+test('Enter during crop mode does not start an AI request',t=>{
+  const p=panel();t.after(p.cleanup);
+  p.receive({type:'state',ready:true,project:'demo',classes:[{id:0,name:'part'}]});
+  p.consent.checked=true;p.consent.listeners.change();
+  p.ref.listeners.click({isTrusted:true});
+  assert.equal(p.ref.disabled,true);
+  const before=p.posted.filter(m=>m.type==='begin').length;
+  p.keydown({key:'Enter',ctrlKey:false,altKey:false,metaKey:false,shiftKey:false,isTrusted:true,repeat:false,preventDefault(){}});
+  assert.equal(p.posted.filter(m=>m.type==='begin').length,before);
+});
+
+test('category filter is locked during a request and unlocks on completion',t=>{
+  const p=panel();t.after(p.cleanup);
+  p.receive({type:'state',ready:true,project:'demo',classes:[{id:0,name:'工件'},{id:1,name:'part'}]});
+  const list=p.elements.find(e=>e.className==='class-list');
+  const item0=list.children[0];
+  assert.equal(item0.children[0].className,'class-box on');
+  p.consent.checked=true;p.consent.listeners.change();
+  p.ai.listeners.click({isTrusted:true});
+  const begin=p.posted.at(-1);
+  assert.equal(list.className,'class-list locked');
+  item0.listeners.click();
+  assert.equal(item0.children[0].className,'class-box on');
+  p.receive({type:'done',requestId:begin.requestId,message:'ok'});
+  assert.equal(list.className,'class-list');
+  item0.listeners.click();
+  assert.equal(item0.children[0].className,'class-box');
+});
+
+test('adding a class preserves disabled classes in the same project',t=>{
+  const p=panel();t.after(p.cleanup);
+  p.receive({type:'state',ready:true,project:'demo',classes:[{id:0,name:'工件'},{id:1,name:'part'}]});
+  const list=p.elements.find(e=>e.className==='class-list');
+  list.children[0].listeners.click();
+  assert.equal(list.children[0].children[0].className,'class-box');
+  p.receive({type:'state',ready:true,project:'demo',classes:[{id:0,name:'工件'},{id:1,name:'part'},{id:2,name:'新增'}]});
+  const list2=p.elements.find(e=>e.className==='class-list');
+  assert.equal(list2.children.length,3);
+  assert.equal(list2.children[0].children[0].className,'class-box');
+  assert.equal(list2.children[1].children[0].className,'class-box on');
+  assert.equal(list2.children[2].children[0].className,'class-box on');
+});
+
+test('switching project resets the category filter',t=>{
+  const p=panel();t.after(p.cleanup);
+  p.receive({type:'state',ready:true,project:'demo',classes:[{id:0,name:'工件'},{id:1,name:'part'}]});
+  const list=p.elements.find(e=>e.className==='class-list');
+  list.children[0].listeners.click();
+  assert.equal(list.children[0].children[0].className,'class-box');
+  p.receive({type:'state',ready:true,project:'other',classes:[{id:0,name:'工件'},{id:1,name:'part'}]});
+  const list2=p.elements.find(e=>e.className==='class-list');
+  assert.equal(list2.children[0].children[0].className,'class-box on');
+  assert.equal(list2.children[1].children[0].className,'class-box on');
+});

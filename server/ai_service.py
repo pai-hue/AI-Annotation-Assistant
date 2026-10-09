@@ -68,6 +68,8 @@ class AIRequest(StrictModel):
     input_width: int = Field(gt=0, le=MAX_SIDE)
     input_height: int = Field(gt=0, le=MAX_SIDE)
     image_data_url: str = Field(max_length=MAX_DATA_URL, repr=False)
+    # Local-only isolation key (the site's project name, hashed for storage). Never sent to Qwen.
+    project_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
     classes: list[ProjectClass] = Field(min_length=1, max_length=100)
     enabled_class_ids: list[int] | None = Field(default=None, max_length=100)
 
@@ -94,6 +96,8 @@ class AIRequest(StrictModel):
 
 
 class ReferenceRequest(StrictModel):
+    # Local-only isolation key (the site's project name, hashed for storage). Never sent to Qwen.
+    project_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
     classes: list[ProjectClass] = Field(min_length=1, max_length=100)
     class_id: int = Field(ge=0, le=1_000_000)
     input_width: int = Field(gt=0, le=REFERENCE_MAX_SIDE)
@@ -160,24 +164,46 @@ def validate_reference_image(request: ReferenceRequest) -> None:
                             "示例图片无效或尺寸不符，请重新采集。")
 
 
-def project_key(classes: list[ProjectClass]) -> str:
-    canonical = json.dumps(sorted((c.id, c.name) for c in classes), ensure_ascii=False)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+def project_key(project_id: str) -> str:
+    # Local-only isolation: hash the site's project name into a safe directory name. The
+    # raw project name is never used as a path component and never sent to Qwen.
+    return hashlib.sha256(project_id.encode("utf-8")).hexdigest()[:16]
+
+
+def _class_name(classes: list[ProjectClass], class_id: int) -> str:
+    return next(c.name for c in classes if c.id == class_id)
+
+
+def _read_index(directory: Path) -> dict:
+    path = directory / "index.json"
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def save_reference(request: ReferenceRequest) -> None:
     validate_reference_image(request)
     header, data = request.image_data_url.split(",", 1)
     ext = "jpg" if header == "data:image/jpeg;base64" else "png"
-    directory = REFERENCES_DIR / project_key(request.classes)
+    directory = REFERENCES_DIR / project_key(request.project_id)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{request.class_id}.{ext}").write_bytes(base64.b64decode(data, validate=True))
+    # Record the class name at capture time so a later rename or ID reuse cannot silently
+    # attach this example to a different class.
+    index = _read_index(directory)
+    index[str(request.class_id)] = _class_name(request.classes, request.class_id)
+    (directory / "index.json").write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
 
 
-def load_references(classes: list[ProjectClass]) -> list[dict]:
-    directory = REFERENCES_DIR / project_key(classes)
+def load_references(project_id: str, classes: list[ProjectClass]) -> list[dict]:
+    directory = REFERENCES_DIR / project_key(project_id)
     if not directory.is_dir():
         return []
+    index = _read_index(directory)
     names = {c.id: c.name for c in classes}
     references = []
     for path in sorted(directory.iterdir()):
@@ -188,6 +214,10 @@ def load_references(classes: list[ProjectClass]) -> list[dict]:
         except ValueError:
             continue
         if class_id not in names:
+            continue
+        # Only use a reference whose captured class name still matches the current class at
+        # this index. This prevents a renamed class or a reused index from being mislabeled.
+        if index.get(str(class_id)) != names[class_id]:
             continue
         try:
             raw = path.read_bytes()
@@ -291,7 +321,7 @@ async def generate_annotations(request: AIRequest, settings: Settings, *, transp
     if not settings.api_key:
         raise AIError("not_configured", "尚未配置千问 API Key，请在项目根目录 .env 中填写北京地域的 DASHSCOPE_API_KEY。", 503)
     validate_image(request)
-    references = load_references(request.classes)
+    references = load_references(request.project_id, request.classes)
     if request.enabled_class_ids is not None:
         enabled = set(request.enabled_class_ids)
         references = [ref for ref in references if ref["class_id"] in enabled]

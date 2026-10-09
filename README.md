@@ -10,14 +10,22 @@
 
 1. 后端依赖已安装；新环境需要执行 `.\.venv\Scripts\python.exe -m pip install -r server\requirements.txt`。
 2. 将 `.env.example` 复制为根目录 `.env`（若已有则保留），在本机填写北京地域的 `DASHSCOPE_API_KEY`。默认 `QWEN_MODEL=qwen3-vl-flash`。密钥从[阿里云百炼](https://help.aliyun.com/zh/model-studio/get-api-key)获取，不要发到聊天或写入扩展。旧的 `OPENAI_API_KEY` 和 `OPENAI_MODEL` 已不使用。
-3. 保持后端运行，打开 `http://127.0.0.1:8000/api/ai/status`；`configured: true` 仅表示读到了密钥，不验证余额、权限或网络。
+3. 保持后端运行，打开 `http://127.0.0.1:18000/api/ai/status`；`configured: true` 仅表示读到了密钥，不验证余额、权限或网络。
 4. Edge 扩展管理页重新加载扩展，确认版本为 `1.0.0`，再刷新原网站。选择一张允许发送给阿里云百炼、尚无标注的测试图片。
 5. 勾选发送提示，点击“预标注”（或用快捷键 Enter）。面板会列出项目全部类别，每个类别前有蓝色实心方块，点击切换为空心即表示千问跳过该类别（默认全部实心）。千问只识别当前实心的类别；“模拟测试”仍仅使用网站当前选中类别。
 6. 初始框写入后，在原网站审核和修正，按原网站流程保存。
 
-可选：想提升类别识别准确率，先在空标注图上选中类别、点面板「采集示例」，拖拽框选要采集的区域后点「确认」给该类存一张示例图（存到本机 `server/references/`）；之后的预标注会自动带上已存示例图。示例尽量框住单个完整物体，例如一块黑色板件。同类别可以输出多个独立框；已在提示词中明确相邻实例分别标注，实际数量以目标图片为准，效果仍需用真实图片检查。
+可选：想提升类别识别准确率，先在空标注图上选中类别、点面板「采集示例」，拖拽框选要采集的区域后点「确认」给该类存一张示例图（存到本机 `server/references/`，按项目隔离）；之后的预标注会自动带上已存示例图。示例尽量框住单个完整物体，例如一块黑色板件。同类别可以输出多个独立框；已在提示词中明确相邻实例分别标注，实际数量以目标图片为准，效果仍需用真实图片检查。示例图按项目名哈希分目录存放，项目改名后旧示例不会自动关联（文件保留，需重新采集）。
 
-真实模式把当前图片的缩小 JPEG 副本及类别表经本机服务发送到阿里云百炼的北京地域接口，按 API 用量计费。API 密钥仅在后端。当前图片有框时拒绝执行；切图、类别改变、空结果和模型错误不会覆盖已有标注。38 项 Node 测试及 29 项 Python 测试通过，模型测试使用伪造响应；新增同类相邻实例的坐标换算和网站写入回归测试，不代表真实模型的分框效果已验收。此前用户试用反馈已记录；样本量、耗时和异常场景专项结果尚未收集。
+真实模式把当前图片的缩小 JPEG 副本及类别表经本机服务发送到阿里云百炼的北京地域接口，按 API 用量计费。API 密钥仅在后端。当前图片有框时拒绝执行；切图、类别改变、空结果和模型错误不会覆盖已有标注。43 项 Node 测试及 33 项 Python 测试通过，模型测试使用伪造响应；新增项目示例隔离、类别筛选锁定与同类相邻实例的坐标换算/网站写入回归测试，不代表真实模型的分框效果已验收。此前用户试用反馈已记录；样本量、耗时和异常场景专项结果尚未收集。
+
+## 隐私与数据安全
+
+点「预标注」后，插件会把**当前图片缩小后的副本**（最长边 1600px 的 JPEG）、**项目类别名**，以及已采集的**示例图**，经本机服务发送到阿里云百炼（北京地域）调用通义千问识别——这属于把图片数据交给第三方云平台。
+
+- 不会发送到阿里云百炼：API 密钥（只留在本机 `.env`）、项目名、文件名、用户账号。项目名仅发送到本机服务（127.0.0.1），用于本地示例图按项目隔离存放，不会被转发给千问。
+- 发送前请确认：图片内容是否允许外发（涉及人脸、身份证、客户隐私、未公开商业机密或受监管数据时，先走公司合规审批）；并核对阿里云百炼的数据处理条款（是否训练、存储与删除机制）。
+- 「模拟测试」不发送图片；只有「预标注」和「采集示例」会发送图片。
 
 ## 原网站模拟预标注
 
@@ -43,13 +51,13 @@ node --test extension/extension.test.cjs extension/platform.test.cjs extension/p
 在项目根目录的 PowerShell 终端执行：
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn server.main:app --host 127.0.0.1 --port 8000 --reload
+.\.venv\Scripts\python.exe -m uvicorn server.main:app --host 127.0.0.1 --port 18000 --reload
 ```
 
 保持终端运行，按 Ctrl+C 停止。
 
-- 健康检查：http://127.0.0.1:8000/health
-- 交互式接口文档：http://127.0.0.1:8000/docs
+- 健康检查：http://127.0.0.1:18000/health
+- 交互式接口文档：http://127.0.0.1:18000/docs
 
 ## 请求模拟标注
 
@@ -57,7 +65,7 @@ node --test extension/extension.test.cjs extension/platform.test.cjs extension/p
 
 ```powershell
 $body = @{ image_id = 'sample-1'; image_width = 1000; image_height = 800 } | ConvertTo-Json
-Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/annotations/mock' -Method Post -ContentType 'application/json' -Body $body | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Uri 'http://127.0.0.1:18000/api/annotations/mock' -Method Post -ContentType 'application/json' -Body $body | ConvertTo-Json -Depth 5
 ```
 
 返回框为 x=100、y=80、width=200、height=160，类别为 part_A。
@@ -76,7 +84,7 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/annotations/mock' -Method Post
 
 ## 测试网页
 
-打开 http://127.0.0.1:8000/demo/ ，选择 PNG/JPEG 图片，点击“网页：生成测试框”。已有框时需先清空再生成。网页按钮用于对照测试，扩展加载方式见下方。
+打开 http://127.0.0.1:18000/demo/ ，选择 PNG/JPEG 图片，点击“网页：生成测试框”。已有框时需先清空再生成。网页按钮用于对照测试，扩展加载方式见下方。
 
 已在浏览器验证加载 1000×800 图片、显示框 (100, 80, 200, 160)、禁止重复生成、清空及重新生成。
 服务中断、30 秒超时和请求中切换图片的防护已实现，但这些交互及窗口缩放尚未完成浏览器实测。
@@ -86,12 +94,12 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/annotations/mock' -Method Post
 1. 保持后端运行，在 Microsoft Edge 地址栏输入 `edge://extensions/`。
 2. 开启“开发人员模式”，点击“加载解压缩的扩展”。
 3. 选择 `D:\AI-Annotation-Assistant\extension`，不要选择项目根目录。
-4. 在同一个 Edge 浏览器打开 `http://127.0.0.1:8000/demo/`。已经打开则刷新。
+4. 在同一个 Edge 浏览器打开 `http://127.0.0.1:18000/demo/`。已经打开则刷新。
 5. 页面应显示“扩展已连接”和“扩展：生成测试框”。选择图片，点击扩展按钮，结果应显示“扩展模拟框已生成”。
 
 加载操作参考 [Microsoft 官方说明](https://learn.microsoft.com/en-us/microsoft-edge/extensions/getting-started/extension-sideloading)。
 
-本地演示仅支持上述 127.0.0.1 地址及 8000 端口，不支持 localhost。v0.2.0 另外支持指定 DeepData Hub 标注页。浏览器匹配规则不能限定本地端口，因此脚本会额外检查精确端口。没有申请 tabs、scripting 或所有网站权限。
+本地演示仅支持上述 127.0.0.1 地址及 18000 端口，不支持 localhost。v0.2.0 另外支持指定 DeepData Hub 标注页。浏览器匹配规则不能限定本地端口，因此脚本会额外检查精确端口。没有申请 tabs、scripting 或所有网站权限。
 
 扩展不会在 Codex 内置浏览器中自动出现；必须在加载了扩展的 Edge 中测试。扩展更新后，在扩展管理页点击重新加载，再刷新测试网页。
 

@@ -33,9 +33,9 @@ if errorlevel 1 (
 )
 echo.
 
-echo [3/3] Starting backend at http://127.0.0.1:8000 ...
+echo [3/3] Starting backend at http://127.0.0.1:18000 ...
 echo Keep this window open while using the plugin. Press Ctrl+C to stop.
 echo.
-".venv\Scripts\python.exe" -m uvicorn server.main:app --host 127.0.0.1 --port 8000 --reload
+".venv\Scripts\python.exe" -m uvicorn server.main:app --host 127.0.0.1 --port 18000 --reload
 
 pause

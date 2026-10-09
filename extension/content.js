@@ -1,7 +1,7 @@
 "use strict";
 (() => {
   // Match patterns do not restrict ports; enforce the exact local origin here.
-  if (location.origin !== "http://127.0.0.1:8000" || !location.pathname.startsWith("/demo/")) return;
+  if (location.origin !== "http://127.0.0.1:18000" || !location.pathname.startsWith("/demo/")) return;
   const toolbar = document.querySelector(".toolbar");
   if (!toolbar || document.getElementById("extension-generate")) return;
   const channel = "annotation-assistant-v1";

@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 const read = name => fs.readFileSync(path.join(__dirname, name), 'utf8');
-const sender = {id: 'test-extension', frameId: 0, url: 'http://127.0.0.1:8000/demo/'};
+const sender = {id: 'test-extension', frameId: 0, url: 'http://127.0.0.1:18000/demo/'};
 const image = {image_id:'test-image', image_width:1000, image_height:800};
 const result = () => ({schema_version:'1.0', ...image, source:'mock', review_status:'pending', objects:[{id:'box-1', class_id:0, class_name:'part_A', x:100, y:80, width:200, height:160}]});
 function backend(fetchImpl) {
@@ -20,14 +20,14 @@ test('background sends only approved metadata to fixed API', async () => {
   const send=backend(async (url, options) => {captured={url, options};return {ok:true,json:async()=>result()};});
   const reply=await send({type:'ANNOTATION_MOCK',image:{...image,url:'https://untrusted.example'}});
   assert.equal(reply.ok,true);
-  assert.equal(captured.url,'http://127.0.0.1:8000/api/annotations/mock');
+  assert.equal(captured.url,'http://127.0.0.1:18000/api/annotations/mock');
   assert.deepEqual(JSON.parse(captured.options.body),image);
   assert.equal(captured.options.redirect,'error');
 });
 test('background rejects unrelated origins, ports, frames and invalid dimensions',async()=>{
   let calls=0;
   const send=backend(async()=>{calls++;throw Error('must not fetch');});
-  for(const source of [{...sender,url:'https://example.com/demo/'},{...sender,url:'http://127.0.0.1:9000/demo/'},{...sender,frameId:1},{...sender,id:'other'}]) {
+  for(const source of [{...sender,url:'https://example.com/demo/'},{...sender,url:'http://127.0.0.1:9000/demo/'},{...sender,url:'http://127.0.0.1:8000/demo/'},{...sender,frameId:1},{...sender,id:'other'}]) {
     assert.equal((await send({type:'ANNOTATION_MOCK',image},source)).ok,false);
   }
   for(const n of [0,-1,'100',true,1.2,1000001]) assert.equal((await send({type:'ANNOTATION_MOCK',image:{...image,image_width:n}})).ok,false);
@@ -39,14 +39,14 @@ test('network failure and HTTP errors produce retryable responses',async()=>{
   }
 });
 
-const aiImage={...image,input_width:1000,input_height:800,image_data_url:'data:image/jpeg;base64,AAAA',classes:[{id:3,name:'part'}]};
+const aiImage={...image,input_width:1000,input_height:800,image_data_url:'data:image/jpeg;base64,AAAA',project_id:'demo',classes:[{id:3,name:'part'}]};
 const platformSender={...sender,url:'https://www.threetone.com.cn/train/annotation/demo/editor'};
 test('AI background forwards only image and classes to fixed local endpoint',async()=>{
   let captured;
   const send=backend(async(url,options)=>{captured={url,options};return {ok:true,json:async()=>({source:'qwen'})};});
   const reply=await send({type:'ANNOTATION_AI',image:{...aiImage,project:'private',filename:'private',url:'https://other.example'}},platformSender);
   assert.equal(reply.ok,true);
-  assert.equal(captured.url,'http://127.0.0.1:8000/api/annotations/ai');
+  assert.equal(captured.url,'http://127.0.0.1:18000/api/annotations/ai');
   assert.deepEqual(JSON.parse(captured.options.body),aiImage);
   assert.equal(captured.options.credentials,'omit');
 });
@@ -70,14 +70,14 @@ test('AI configuration errors remain actionable and unrelated error bodies are h
   assert.doesNotMatch((await bad({type:'ANNOTATION_AI',image:aiImage},platformSender)).error,/sensitive/);
 });
 
-const refImage={...image,input_width:640,input_height:512,image_data_url:'data:image/jpeg;base64,AAAA',classes:[{id:3,name:'part'},{id:9,name:'工件'}],class_id:9};
-const refBody={input_width:640,input_height:512,image_data_url:'data:image/jpeg;base64,AAAA',classes:[{id:3,name:'part'},{id:9,name:'工件'}],class_id:9};
+const refImage={...image,input_width:640,input_height:512,image_data_url:'data:image/jpeg;base64,AAAA',project_id:'demo',classes:[{id:3,name:'part'},{id:9,name:'工件'}],class_id:9};
+const refBody={input_width:640,input_height:512,image_data_url:'data:image/jpeg;base64,AAAA',project_id:'demo',classes:[{id:3,name:'part'},{id:9,name:'工件'}],class_id:9};
 test('REFERENCE_CAPTURE forwards to /api/references and rejects unknown class or oversized input',async()=>{
   let captured;
   const send=backend(async(url,options)=>{captured={url,options};return {ok:true,json:async()=>({ok:true})};});
   const reply=await send({type:'REFERENCE_CAPTURE',image:refImage},platformSender);
   assert.equal(reply.ok,true);
-  assert.equal(captured.url,'http://127.0.0.1:8000/api/references');
+  assert.equal(captured.url,'http://127.0.0.1:18000/api/references');
   assert.deepEqual(JSON.parse(captured.options.body),refBody);
   let calls=0;
   const reject=backend(async()=>{calls++;throw Error('unexpected');});
@@ -98,9 +98,9 @@ function page(fetchImpl) {
   const toolbar=element();
   const listeners=[];
   const window={addEventListener(type,fn){if(type==='message')listeners.push(fn);},
-    postMessage(data){queueMicrotask(()=>listeners.forEach(fn=>fn({source:window,origin:'http://127.0.0.1:8000',data})));}};
+    postMessage(data){queueMicrotask(()=>listeners.forEach(fn=>fn({source:window,origin:'http://127.0.0.1:18000',data})));}};
   const send=backend(fetchImpl);
-  const context=vm.createContext({window,location:{origin:'http://127.0.0.1:8000',pathname:'/demo/'},
+  const context=vm.createContext({window,location:{origin:'http://127.0.0.1:18000',pathname:'/demo/'},
     document:{getElementById:id=>elements[id],querySelector:()=>toolbar,createElement:()=>element(),createElementNS:()=>element()},
     crypto:require('node:crypto').webcrypto,setTimeout,clearTimeout,AbortController,
     chrome:{runtime:{sendMessage(message,callback){send(message).then(callback);}}}});
@@ -203,6 +203,18 @@ test('AI background forwards enabled_class_ids and rejects invalid subsets',asyn
   const reject=backend(async()=>{calls++;throw Error('unexpected');});
   for(const mutation of [{enabled_class_ids:[]},{enabled_class_ids:[7]},{enabled_class_ids:[3,3]}]) {
     assert.equal((await reject({type:'ANNOTATION_AI',image:{...aiImage,...mutation}},platformSender)).ok,false);
+  }
+  assert.equal(calls,0);
+});
+
+test('AI and reference reject missing or invalid project_id',async()=>{
+  let calls=0;
+  const send=backend(async()=>{calls++;throw Error('unexpected');});
+  for(const mutation of [{project_id:undefined},{project_id:''},{project_id:'  '},{project_id:'x'.repeat(201)},{project_id:123}]) {
+    assert.equal((await send({type:'ANNOTATION_AI',image:{...aiImage,...mutation}},platformSender)).ok,false);
+  }
+  for(const mutation of [{project_id:undefined},{project_id:''},{project_id:123}]) {
+    assert.equal((await send({type:'REFERENCE_CAPTURE',image:{...refImage,...mutation}},platformSender)).ok,false);
   }
   assert.equal(calls,0);
 });

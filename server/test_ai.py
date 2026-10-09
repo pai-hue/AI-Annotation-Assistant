@@ -29,6 +29,7 @@ def sample():
     Image.new("RGB", (100, 80), (70, 120, 90)).save(buffer, format="PNG")
     return dict(image_id="test-1", image_width=100, image_height=80, input_width=100, input_height=80,
                 image_data_url="data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode(),
+                project_id="demo-project",
                 classes=[dict(id=3, name="工件"), dict(id=9, name="part")])
 
 
@@ -82,6 +83,7 @@ class ModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(wire["stream"])
         self.assertFalse(wire["enable_thinking"])
         self.assertNotIn(request.image_id, captured[0].content.decode())
+        self.assertNotIn(request.project_id, captured[0].content.decode())
         self.assertEqual(wire["response_format"], {"type": "json_object"})
         self.assertEqual(wire["messages"][1]["content"][0],
                          {"type": "image_url", "image_url": {"url": request.image_data_url}})
@@ -154,10 +156,11 @@ class ModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, "invalid_model_result")
         self.assertNotIn("private", caught.exception.message)
 
-    def _reference_request(self, class_id):
+    def _reference_request(self, class_id, project_id="demo-project"):
         buffer = BytesIO()
         Image.new("RGB", (320, 240), (10, 20, 30)).save(buffer, format="JPEG")
-        return ReferenceRequest(classes=[ProjectClass(id=3, name="工件"), ProjectClass(id=9, name="part")],
+        return ReferenceRequest(project_id=project_id,
+            classes=[ProjectClass(id=3, name="工件"), ProjectClass(id=9, name="part")],
             class_id=class_id, input_width=320, input_height=240,
             image_data_url="data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode())
 
@@ -311,27 +314,56 @@ class ReferenceTests(unittest.TestCase):
     def _reference(self, **overrides):
         buffer = BytesIO()
         Image.new("RGB", (320, 240), (10, 20, 30)).save(buffer, format="JPEG")
-        payload = dict(classes=[dict(id=3, name="工件"), dict(id=9, name="part")],
+        payload = dict(project_id="demo-project",
+                       classes=[dict(id=3, name="工件"), dict(id=9, name="part")],
                        class_id=9, input_width=320, input_height=240,
                        image_data_url="data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode())
         payload.update(overrides)
         return payload
 
-    def test_project_key_is_order_independent(self):
-        a = [ProjectClass(id=3, name="工件"), ProjectClass(id=9, name="part")]
-        b = [ProjectClass(id=9, name="part"), ProjectClass(id=3, name="工件")]
-        self.assertEqual(project_key(a), project_key(b))
-        self.assertNotEqual(project_key(a), project_key([ProjectClass(id=3, name="工件")]))
+    def test_project_key_is_a_safe_hash_of_the_project_name(self):
+        key = project_key("demo-project")
+        self.assertRegex(key, r"^[0-9a-f]{16}$")
+        self.assertEqual(key, project_key("demo-project"))
+        self.assertNotEqual(key, project_key("other-project"))
 
     def test_save_and_load_references_roundtrip(self):
         request = ReferenceRequest(**self._reference())
         with patch("server.ai_service.REFERENCES_DIR", self.refs):
             save_reference(request)
-            loaded = load_references(request.classes)
+            loaded = load_references(request.project_id, request.classes)
         self.assertEqual(len(loaded), 1)
         self.assertEqual(loaded[0]["class_id"], 9)
         self.assertEqual(loaded[0]["class_name"], "part")
         self.assertTrue(loaded[0]["data_url"].startswith("data:image/jpeg;base64,"))
+
+    def test_examples_are_isolated_per_project(self):
+        request = ReferenceRequest(**self._reference())
+        with patch("server.ai_service.REFERENCES_DIR", self.refs):
+            save_reference(request)
+            self.assertEqual(len(load_references("demo-project", request.classes)), 1)
+            self.assertEqual(load_references("other-project", request.classes), [])
+
+    def test_adding_a_class_keeps_existing_examples(self):
+        request = ReferenceRequest(**self._reference())
+        with patch("server.ai_service.REFERENCES_DIR", self.refs):
+            save_reference(request)
+            classes = [ProjectClass(id=3, name="工件"), ProjectClass(id=9, name="part"), ProjectClass(id=12, name="新增")]
+            loaded = load_references("demo-project", classes)
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0]["class_id"], 9)
+        self.assertEqual(loaded[0]["class_name"], "part")
+
+    def test_reference_is_skipped_when_class_name_changes(self):
+        request = ReferenceRequest(**self._reference())
+        with patch("server.ai_service.REFERENCES_DIR", self.refs):
+            save_reference(request)
+            renamed = [ProjectClass(id=3, name="工件"), ProjectClass(id=9, name="重命名")]
+            self.assertEqual(load_references("demo-project", renamed), [])
+
+    def test_reference_requires_project_id(self):
+        with self.assertRaises(ValidationError):
+            ReferenceRequest(**{k: v for k, v in self._reference().items() if k != "project_id"})
 
     def test_build_payload_adds_references_only_when_present(self):
         request = AIRequest(**sample())

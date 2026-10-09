@@ -84,6 +84,7 @@ test('AI reads original image without overlays; mock and polls do not capture pi
   assert.deepEqual(JSON.parse(JSON.stringify(request.image.classes)),[{id:0,name:'workpiece'},{id:1,name:'part'}]);
   assert.equal(request.image.project,undefined);
   assert.equal(request.image.filename,undefined);
+  assert.equal(request.image.project_id,'demo');
   p.finish({ok:false,error:'cancel'});
 });
 
@@ -151,6 +152,7 @@ test('reference capture sends a downscaled image with class and never writes box
   assert.equal(request.image.class_id,1);
   assert.equal(request.image.class_name,'part');
   assert.deepEqual(JSON.parse(JSON.stringify(request.image.classes)),[{id:0,name:'workpiece'},{id:1,name:'part'}]);
+  assert.equal(request.image.project_id,'demo');
   p.finish({ok:true,data:{ok:true}});
   assert.equal(p.read('annotations["test.png"]'),undefined);
   assert.equal(p.read('refreshes'),0);
@@ -197,8 +199,10 @@ test('state announces project classes even before an image is ready',()=>{
   const p=fixture();
   p.read('classes=[]');p.send({type:'hello'});
   assert.equal(p.messages.findLast(m=>m.type==='state').classes,null);
+  assert.equal(p.messages.findLast(m=>m.type==='state').project,'demo');
   p.read("classes=['workpiece','part']");p.send({type:'hello'});
   assert.deepEqual(JSON.parse(JSON.stringify(p.messages.findLast(m=>m.type==='state').classes)),[{id:0,name:'workpiece'},{id:1,name:'part'}]);
+  assert.equal(p.messages.findLast(m=>m.type==='state').project,'demo');
 });
 
 test('AI requires a non-empty valid enabled class list and forwards it',()=>{

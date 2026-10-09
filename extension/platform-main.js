@@ -28,12 +28,16 @@
     if(!Array.isArray(classes) || !classes.length || !classes.every(name=>typeof name==="string" && name.trim())) return null;
     return classes.map((name,id)=>({id,name}));
   }
+  function readProject() {
+    return (typeof projectName === "string" && projectName.trim()) ? projectName : null;
+  }
   function announce() {
     const list=readClasses();
+    const project=readProject();
     try {
       const state=snapshot();
-      post({type:"state",ready:!pending,busy:!!pending,label:`模拟类别：${state.className}；AI 将识别下方所选类别。`,classes:list});
-    } catch(error) { post({type:"state",ready:false,busy:!!pending,label:error.message,classes:list}); }
+      post({type:"state",ready:!pending,busy:!!pending,label:`模拟类别：${state.className}；AI 将识别下方所选类别。`,classes:list,project});
+    } catch(error) { post({type:"state",ready:false,busy:!!pending,label:error.message,classes:list,project}); }
   }
   function finish(message, error=false) {
     const requestId=pending?.requestId;
@@ -62,7 +66,7 @@
     try {encoded=capture.toDataURL("image/jpeg",0.85);} catch {throw Error("原网站限制了图片读取，暂时无法发送此图片。");}
     if(!encoded.startsWith("data:image/jpeg;base64,") || encoded.length>2796236) throw Error("图片编码失败或超过 2 MiB，请改用较小测试图片。");
     return {input_width:capture.width,input_height:capture.height,image_data_url:encoded,
-      classes:classes.map((name,id)=>({id,name}))};
+      classes:classes.map((name,id)=>({id,name})),project_id:state.project};
   }
   window.addEventListener("message",event=>{
     if(event.source !== window || event.origin !== location.origin) return;
