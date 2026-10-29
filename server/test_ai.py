@@ -6,7 +6,6 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
-import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -16,10 +15,9 @@ from PIL import Image
 from pydantic import ValidationError
 
 from server.ai_service import (
-    AIError, AIRequest, MAX_BODY_BYTES, ProjectClass, ReferenceRequest,
-    REFERENCES_DIR, Settings, build_payload, convert_response,
-    generate_annotations, get_settings, load_references, project_key,
-    save_reference, validate_image,
+    AIError, AIRequest, MAX_BODY_BYTES, ProjectClass,
+    Settings, build_payload, convert_response,
+    generate_annotations, get_settings, validate_image,
 )
 from server.main import app
 
@@ -59,13 +57,6 @@ class SettingsTests(unittest.TestCase):
 
 
 class ModelTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
-        self._refs = patch("server.ai_service.REFERENCES_DIR", Path(self._tmp.name))
-        self._refs.start()
-        self.addCleanup(self._refs.stop)
-
     async def test_real_wire_contract_and_original_pixels(self):
         captured = []
 
@@ -156,16 +147,7 @@ class ModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, "invalid_model_result")
         self.assertNotIn("private", caught.exception.message)
 
-    def _reference_request(self, class_id, project_id="demo-project"):
-        buffer = BytesIO()
-        Image.new("RGB", (320, 240), (10, 20, 30)).save(buffer, format="JPEG")
-        return ReferenceRequest(project_id=project_id,
-            classes=[ProjectClass(id=3, name="工件"), ProjectClass(id=9, name="part")],
-            class_id=class_id, input_width=320, input_height=240,
-            image_data_url="data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode())
-
-    async def test_enabled_classes_filter_prompt_and_references(self):
-        save_reference(self._reference_request(9))
+    async def test_enabled_classes_filter_prompt(self):
         request = AIRequest(**{**sample(), "enabled_class_ids": [3]})
         captured = []
 
@@ -180,6 +162,7 @@ class ModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(content[0], {"type": "image_url", "image_url": {"url": request.image_data_url}})
         self.assertIn('"id": 3', content[-1]["text"])
         self.assertNotIn('"id": 9', content[-1]["text"])
+        self.assertEqual(sum(1 for part in content if part.get("type") == "image_url"), 1)
 
     async def test_disabled_class_output_is_rejected(self):
         request = AIRequest(**{**sample(), "enabled_class_ids": [3]})
@@ -262,138 +245,31 @@ class ValidationTests(unittest.TestCase):
 class EndpointTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
-        self.settings = patch("server.main.get_settings", return_value=Settings(""))
-        self.settings.start()
-        self.addCleanup(self.settings.stop)
         self.addCleanup(self.client.close)
-        self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
-        self._refs = patch("server.ai_service.REFERENCES_DIR", Path(self._tmp.name))
-        self._refs.start()
-        self.addCleanup(self._refs.stop)
 
-    def test_status_is_configuration_presence_only_and_missing_key_is_actionable(self):
-        self.assertEqual(self.client.get("/api/ai/status").json(), dict(provider="qwen", model="qwen3-vl-flash", configured=False))
+    def test_status_is_yolo_focused_and_qwen_endpoint_is_gone(self):
+        with patch("server.main.yolo_status", return_value={
+            "provider": "yolo", "configured": False, "model_path": None,
+            "ultralytics": False, "conf": 0.25, "iou": 0.45, "device": "0",
+        }):
+            body = self.client.get("/api/ai/status").json()
+        self.assertEqual(body["provider"], "yolo")
+        self.assertEqual(body["configured"], False)
+        self.assertIn("yolo", body)
+        self.assertNotIn("model", body)  # DashScope model no longer required for prelabel
         response = self.client.post("/api/annotations/ai", json=sample())
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()["code"], "not_configured")
+        self.assertEqual(response.status_code, 404)
 
-    def test_validation_never_echoes_image_data(self):
+    def test_yolo_validation_never_echoes_image_data(self):
         invalid = {**sample(), "classes": []}
-        response = self.client.post("/api/annotations/ai", json=invalid)
+        response = self.client.post("/api/annotations/yolo", json=invalid)
         self.assertEqual(response.status_code, 422)
         self.assertNotIn(invalid["image_data_url"], response.text)
-        response = self.client.post("/api/annotations/ai", content=b"x" * (MAX_BODY_BYTES + 1), headers={"Content-Type": "application/json"})
+        response = self.client.post("/api/annotations/yolo", content=b"x" * (MAX_BODY_BYTES + 1), headers={"Content-Type": "application/json"})
         self.assertEqual(response.status_code, 413)
 
-    def test_origin_and_content_type_checked_before_model_call(self):
-        with patch("server.main.generate_annotations", new_callable=AsyncMock) as generate:
-            self.assertEqual(self.client.post("/api/annotations/ai", json=sample(), headers={"Origin": "https://untrusted.example"}).status_code, 403)
-            self.assertEqual(self.client.post("/api/annotations/ai", content="{}").status_code, 415)
-            generate.assert_not_called()
-
-    def test_endpoint_model_adapter_integration(self):
-        async def fake(request, settings):
-            return await generate_annotations(request, Settings("fake-key"), transport=httpx.MockTransport(lambda _: httpx.Response(200, json=model_reply())))
-
-        with patch("server.main.generate_annotations", side_effect=fake):
-            response = self.client.post("/api/annotations/ai", json=sample(), headers={"Origin": "chrome-extension://test"})
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["source"], "qwen")
-        self.assertEqual(response.json()["objects"][0]["class_id"], 9)
-
-
-class ReferenceTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.refs = Path(self.tmp.name)
-        self.client = TestClient(app)
-        self.addCleanup(self.client.close)
-
-    def _reference(self, **overrides):
-        buffer = BytesIO()
-        Image.new("RGB", (320, 240), (10, 20, 30)).save(buffer, format="JPEG")
-        payload = dict(project_id="demo-project",
-                       classes=[dict(id=3, name="工件"), dict(id=9, name="part")],
-                       class_id=9, input_width=320, input_height=240,
-                       image_data_url="data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode())
-        payload.update(overrides)
-        return payload
-
-    def test_project_key_is_a_safe_hash_of_the_project_name(self):
-        key = project_key("demo-project")
-        self.assertRegex(key, r"^[0-9a-f]{16}$")
-        self.assertEqual(key, project_key("demo-project"))
-        self.assertNotEqual(key, project_key("other-project"))
-
-    def test_save_and_load_references_roundtrip(self):
-        request = ReferenceRequest(**self._reference())
-        with patch("server.ai_service.REFERENCES_DIR", self.refs):
-            save_reference(request)
-            loaded = load_references(request.project_id, request.classes)
-        self.assertEqual(len(loaded), 1)
-        self.assertEqual(loaded[0]["class_id"], 9)
-        self.assertEqual(loaded[0]["class_name"], "part")
-        self.assertTrue(loaded[0]["data_url"].startswith("data:image/jpeg;base64,"))
-
-    def test_examples_are_isolated_per_project(self):
-        request = ReferenceRequest(**self._reference())
-        with patch("server.ai_service.REFERENCES_DIR", self.refs):
-            save_reference(request)
-            self.assertEqual(len(load_references("demo-project", request.classes)), 1)
-            self.assertEqual(load_references("other-project", request.classes), [])
-
-    def test_adding_a_class_keeps_existing_examples(self):
-        request = ReferenceRequest(**self._reference())
-        with patch("server.ai_service.REFERENCES_DIR", self.refs):
-            save_reference(request)
-            classes = [ProjectClass(id=3, name="工件"), ProjectClass(id=9, name="part"), ProjectClass(id=12, name="新增")]
-            loaded = load_references("demo-project", classes)
-        self.assertEqual(len(loaded), 1)
-        self.assertEqual(loaded[0]["class_id"], 9)
-        self.assertEqual(loaded[0]["class_name"], "part")
-
-    def test_reference_is_skipped_when_class_name_changes(self):
-        request = ReferenceRequest(**self._reference())
-        with patch("server.ai_service.REFERENCES_DIR", self.refs):
-            save_reference(request)
-            renamed = [ProjectClass(id=3, name="工件"), ProjectClass(id=9, name="重命名")]
-            self.assertEqual(load_references("demo-project", renamed), [])
-
-    def test_reference_requires_project_id(self):
-        with self.assertRaises(ValidationError):
-            ReferenceRequest(**{k: v for k, v in self._reference().items() if k != "project_id"})
-
-    def test_build_payload_adds_references_only_when_present(self):
-        request = AIRequest(**sample())
-        without = build_payload(request, "qwen3-vl-flash")
-        self.assertEqual(without["messages"][1]["content"][0],
-                         {"type": "image_url", "image_url": {"url": request.image_data_url}})
-        refs = [{"class_id": 3, "class_name": "工件", "data_url": "data:image/jpeg;base64,AAAA"}]
-        with_refs = build_payload(request, "qwen3-vl-flash", refs)
-        content = with_refs["messages"][1]["content"]
-        self.assertEqual(content[0]["type"], "text")
-        self.assertIn("示例图", content[0]["text"])
-        self.assertEqual(content[1]["type"], "image_url")
-        self.assertEqual(content[-2]["image_url"]["url"], request.image_data_url)
-        self.assertIn("所有可见实例", content[-1]["text"])
-
-    def test_reference_endpoint_saves_and_rejects_bad_input(self):
-        payload = self._reference()
-        with patch("server.ai_service.REFERENCES_DIR", self.refs):
-            ok = self.client.post("/api/references", json=payload, headers={"Origin": "chrome-extension://test"})
-            self.assertEqual(ok.status_code, 200)
-            self.assertEqual(ok.json(), {"ok": True})
-            bad = self._reference(class_id=7)
-            self.assertEqual(self.client.post("/api/references", json=bad,
-                                              headers={"Origin": "chrome-extension://test"}).status_code, 422)
-            extra = self._reference(image_id="unexpected")
-            self.assertEqual(self.client.post("/api/references", json=extra,
-                                              headers={"Origin": "chrome-extension://test"}).status_code, 422)
-            self.assertEqual(self.client.post("/api/references", json=payload,
-                                              headers={"Origin": "https://untrusted.example"}).status_code, 403)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_yolo_origin_and_content_type_checked_before_infer(self):
+        with patch("server.main.run_yolo") as run:
+            self.assertEqual(self.client.post("/api/annotations/yolo", json=sample(), headers={"Origin": "https://untrusted.example"}).status_code, 403)
+            self.assertEqual(self.client.post("/api/annotations/yolo", content="{}").status_code, 415)
+            run.assert_not_called()

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FramePilot</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header class="panel-header">
+    <span class="title">FramePilot · 本机预标注</span>
+  </header>
+
+  <p id="panel-project" class="project">未连接项目</p>
+
+  <div class="button-row">
+    <button id="btn-yolo" class="primary" disabled>预标注</button>
+    <button id="btn-mock" disabled>模拟测试</button>
+  </div>
+
+  <div class="section-header">
+    <span class="section-title">YOLO 权重</span>
+    <button id="btn-models-refresh" class="small">刷新</button>
+  </div>
+  <div id="yolo-model-panel" class="yolo-model-panel">
+    <p id="yolo-model-current" class="yolo-line">正在读取本机权重…</p>
+    <p id="yolo-model-ready" class="yolo-line"></p>
+    <div id="yolo-class-names" class="yolo-class-names" aria-live="polite"></div>
+    <label class="yolo-select-label" for="yolo-model-select">从本机目录选择权重</label>
+    <div class="yolo-switch-row">
+      <select id="yolo-model-select" disabled></select>
+      <button id="btn-model-switch" class="small" disabled>确认切换</button>
+    </div>
+    <p class="yolo-hint">权重须放在本机 server/models/（可含子目录）。切换需确认；失败保留原权重。类别名须与网站项目类别精确一致才会写入。</p>
+  </div>
+
+  <div id="model-modal" class="modal-backdrop" hidden>
+    <div class="modal">
+      <h2 class="modal-title">确认切换 YOLO 权重</h2>
+      <p id="model-modal-from" class="modal-line"></p>
+      <p id="model-modal-to" class="modal-line"></p>
+      <p class="modal-note">切换后后续「预标注」将使用新权重。扩展不上传模型文件。</p>
+      <div class="modal-actions">
+        <button id="model-cancel">取消</button>
+        <button id="model-confirm" class="primary">确认切换</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="class-header">识别类别（点击方块切换）</div>
+  <div id="class-list" class="class-list" role="group"></div>
+
+  <p id="panel-status" class="status" role="status">正在连接原网站标注器…</p>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

@@ -1,31 +1,35 @@
 # FramePilot
 
-当前规格为 v1.0：真实模型改为阿里云百炼的通义千问，插件面板可按类别控制千问是否识别（空心方块=跳过）；插件仅负责初始标注，人工审核、修改和保存都在原网站完成。用户已验证模拟框写入、移动/缩放及保存后保留，并在千问版本更新后反馈“目前测试没有发现任何问题”。当前进入小批量流程与效率验证阶段。下方本地编辑/导出功能仅为历史测试工具。
+当前规格为 **v0.7.5（扩展 v1.5.1）**：产品范围同 0.7（**放弃千问预标注**；本机 YOLO 预标注），**文档已重排便于开发**。主线——少量人工种子 → 训练 → 侧边栏「预标注」辅助标完剩余图片（人工仍在原网站审核）。**迭代补标（原 M5.4）与现场候选训练（原 M6）由原网站完成，本插件不做**；训好的权重仍可用 M5.5 接入。模拟测试保留；**示例库已移除**（v0.7.4）。详见 [docs/spec.md](docs/spec.md)。 **M5.5 已实现**（侧边栏选权重 + 展示 `model.names`）；说明见 [docs/M5_5_YOLO_MODEL_SWITCH.md](docs/M5_5_YOLO_MODEL_SWITCH.md)。
 
-> 同事要在自己的电脑上安装使用？见 [同事安装指南](docs/setup-colleagues.md)。
+> 同事要在自己的电脑上安装使用？见 [同事安装指南](docs/setup-colleagues.md)。注意：同事指南中若仍写千问发送，以本 README 与规格最新段落为准——预标注不再外发图片。
 
-## 千问预标注（扩展 v1.0.0）
+## M5 本机 YOLO（进行中）
 
-详细操作见 [AI 配置与验收说明](docs/ai-setup.md)。
+规格见 [docs/spec.md](docs/spec.md) 的 M5。已完成：
 
-1. 后端依赖已安装；新环境需要执行 `.\.venv\Scripts\python.exe -m pip install -r server\requirements.txt`。
-2. 将 `.env.example` 复制为根目录 `.env`（若已有则保留），在本机填写北京地域的 `DASHSCOPE_API_KEY`。默认 `QWEN_MODEL=qwen3-vl-flash`。密钥从[阿里云百炼](https://help.aliyun.com/zh/model-studio/get-api-key)获取，不要发到聊天或写入扩展。旧的 `OPENAI_API_KEY` 和 `OPENAI_MODEL` 已不使用。
-3. 保持后端运行，打开 `http://127.0.0.1:18000/api/ai/status`；`configured: true` 仅表示读到了密钥，不验证余额、权限或网络。
-4. Edge 扩展管理页重新加载扩展，确认版本为 `1.0.0`，再刷新原网站。选择一张允许发送给阿里云百炼、尚无标注的测试图片。
-5. 勾选发送提示，点击“预标注”（或用快捷键 Enter）。面板会列出项目全部类别，每个类别前有蓝色实心方块，点击切换为空心即表示千问跳过该类别（默认全部实心）。千问只识别当前实心的类别；“模拟测试”仍仅使用网站当前选中类别。
-6. 初始框写入后，在原网站审核和修正，按原网站流程保存。
+- **M5.1**：`tools/prepare_yolo_dataset.py`，说明见 [docs/M5_1_YOLO_DATASET.md](docs/M5_1_YOLO_DATASET.md)
+- **M5.3**：`server/yolo_service.py` + `POST /api/annotations/yolo`；侧边栏「预标注」（扩展 v1.5.1，本机 YOLO）；默认权重 `server/models/model_20261027_232748.pt`（6 类：支架/产品/手套/抱箍/黄色气枪/黄色扳手）。用法见 [docs/M5_3_YOLO_INFER.md](docs/M5_3_YOLO_INFER.md)
 
-可选：想提升类别识别准确率，先在空标注图上选中类别、点面板「采集示例」，拖拽框选要采集的区域后点「确认」给该类存一张示例图（存到本机 `server/references/`，按项目隔离）；之后的预标注会自动带上已存示例图。示例尽量框住单个完整物体，例如一块黑色板件。同类别可以输出多个独立框；已在提示词中明确相邻实例分别标注，实际数量以目标图片为准，效果仍需用真实图片检查。示例图按项目名哈希分目录存放，项目改名后旧示例不会自动关联（文件保留，需重新采集）。
+M5.2 首训可跳过（已有现成权重）。启动后端请用项目内 `.venv-yolo`（Python 3.12 + CUDA torch + Ultralytics）：在项目根目录执行 `.\scripts\start-server.ps1`，或 `.\.venv-yolo\Scripts\python.exe -m uvicorn server.main:app --host 127.0.0.1 --port 18000`。不要用系统 Python 3.14 或未装 Ultralytics 的 `.venv`。
 
-真实模式把当前图片的缩小 JPEG 副本及类别表经本机服务发送到阿里云百炼的北京地域接口，按 API 用量计费。API 密钥仅在后端。当前图片有框时拒绝执行；切图、类别改变、空结果和模型错误不会覆盖已有标注。43 项 Node 测试及 33 项 Python 测试通过，模型测试使用伪造响应；新增项目示例隔离、类别筛选锁定与同类相邻实例的坐标换算/网站写入回归测试，不代表真实模型的分框效果已验收。此前用户试用反馈已记录；样本量、耗时和异常场景专项结果尚未收集。
+## 本机 YOLO 预标注（扩展 v1.5.1）
+
+详细见 [docs/M5_3_YOLO_INFER.md](docs/M5_3_YOLO_INFER.md)。
+
+1. 后端依赖：用项目内 `.venv-yolo` 启动（见上文 M5 / `.\scripts\start-server.ps1`）。权重路径写在根目录 `.env` 的 `YOLO_MODEL_PATH`（勿提交密钥；`DASHSCOPE_API_KEY` **预标注已不再使用**，可留在本机 `.env` 但不会被调用）。
+2. 打开 `http://127.0.0.1:18000/api/ai/status`；`provider` 应为 `yolo`，`configured: true` 表示权重文件存在且本机可 import ultralytics。
+3. Edge 扩展管理页重新加载扩展，确认版本为 **1.5.1**，再刷新原网站。点击工具栏 FramePilot 图标打开侧边栏。
+4. 选择尚无标注的图片，确认类别开关（空心=跳过该类），点「预标注」或按 Enter。图片只在本机推理，不发阿里云。
+5. 初始框写入后，在原网站审核和修正，按原网站流程保存。
+
 
 ## 隐私与数据安全
 
-点「预标注」后，插件会把**当前图片缩小后的副本**（最长边 1600px 的 JPEG）、**项目类别名**，以及已采集的**示例图**，经本机服务发送到阿里云百炼（北京地域）调用通义千问识别——这属于把图片数据交给第三方云平台。
+点「预标注」后，插件把当前图片的缩小 JPEG 副本与类别表发到**本机** `127.0.0.1:18000` 做 YOLO 推理，**不会**发送到阿里云百炼。
 
-- 不会发送到阿里云百炼：API 密钥（只留在本机 `.env`）、项目名、文件名、用户账号。项目名仅发送到本机服务（127.0.0.1），用于本地示例图按项目隔离存放，不会被转发给千问。
-- 发送前请确认：图片内容是否允许外发（涉及人脸、身份证、客户隐私、未公开商业机密或受监管数据时，先走公司合规审批）；并核对阿里云百炼的数据处理条款（是否训练、存储与删除机制）。
-- 「模拟测试」不发送图片；只有「预标注」和「采集示例」会发送图片。
+- 「模拟测试」不发送图片字节。
+- 若 `.env` 仍留有旧的 `DASHSCOPE_API_KEY`，请勿把它发到聊天或截图；预标注路径不会读取它。
 
 ## 原网站模拟预标注
 
@@ -33,7 +37,7 @@
 2. 在 Edge 的 `edge://extensions/` 找到 FramePilot，点击重新加载。如果出现新站点访问提示，核对目标为 `www.threetone.com.cn`。
 3. 刷新原网站 `/train/annotation/项目名/editor` 标注页。
 4. 选择一张没有标注的图片，并在网站类别列表点击一个类别。模拟测试建议选刚添加的 `part`。
-5. 页面左下附近出现“模拟测试”，面板显示当前类别及状态。该按钮不需要勾选 AI 图片发送选项。
+5. 点击浏览器工具栏的 FramePilot 图标打开侧边栏，侧边栏显示当前项目及类别状态。模拟测试与 YOLO 预标注均无需第三方发送许可。
 6. 点击后会把固定比例模拟框转换为网站原生框。随后使用网站自带工具调整或删除。
 
 模拟框使用当前选中类别，不是真实识别。插件只向本机服务发送随机请求 ID 和图片尺寸，不发送图片字节、公司项目名或类别名。写入后原网站的自动保存可能把框保存至公司后台；插件不创建数据集、不导出、不确认审核。
@@ -43,18 +47,24 @@
 验证：此前 14 项 Node 模拟测试和 4 项后端 HTTP 测试通过；用户已验证原网站按钮、原生框写入、移动/缩放及保存后保留。请求中切图、类别变更、播放、超时、删除及不同浏览器缩放比例仍需专项现场验收，不能把正常流程通过等同于全部验收完成。
 
 ```powershell
-node --test extension/extension.test.cjs extension/platform.test.cjs extension/platform-content.test.cjs
+node --test extension/extension.test.cjs extension/platform.test.cjs extension/platform-content.test.cjs extension/sidepanel.test.cjs
 ```
 
 ## 启动后端
 
-在项目根目录的 PowerShell 终端执行：
+YOLO 预标注需要含 Ultralytics 的环境。推荐在项目根目录执行：
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn server.main:app --host 127.0.0.1 --port 18000 --reload
+.\scripts\start-server.ps1
 ```
 
-保持终端运行，按 Ctrl+C 停止。
+等价于：
+
+```powershell
+.\.venv-yolo\Scripts\python.exe -m uvicorn server.main:app --host 127.0.0.1 --port 18000
+```
+
+保持终端运行，按 Ctrl+C 停止。首次搭建 `.venv-yolo` 见 [docs/ai-setup.md](docs/ai-setup.md)。不要用未装 Ultralytics 的 `.venv`（Python 3.14）启动，否则侧边栏会报「未安装 Ultralytics」。
 
 - 健康检查：http://127.0.0.1:18000/health
 - 交互式接口文档：http://127.0.0.1:18000/docs
@@ -77,7 +87,7 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:18000/api/annotations/mock' -Method Pos
 ## 自动验证
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest server.test_api server.test_ai -v
+.\.venv-yolo\Scripts\python.exe -m unittest server.test_api server.test_ai server.test_yolo_service_unit -v
 ```
 
 测试会在临时本地端口启动真实 HTTP 服务，并在完成后停止该测试服务。
@@ -107,7 +117,7 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:18000/api/annotations/mock' -Method Pos
 
 扩展注入按钮 → 网页锁定当前图片 → content script → background service worker → 固定本机接口 → 网页校验结果并显示框。
 
-网页与 content script 使用带版本号的 postMessage 协议，检查来源、消息类型和请求 ID；后台检查扩展来源、主框架和图片参数。页面消息不是可信的身份认证，后台不会接受页面指定的 URL 或任意请求头。真实模式还需要插件面板中的人工点击和发送勾选；模型密钥只留在后端，后台只连接固定本机接口。
+网页与 content script 使用带版本号的 postMessage 协议，检查来源、消息类型和请求 ID；后台检查扩展来源、主框架和图片参数。页面消息不是可信的身份认证，后台不会接受页面指定的 URL 或任意请求头。真实模式还需要插件侧边栏中的人工点击和发送勾选；模型密钥只留在后端，后台只连接固定本机接口。
 
 请求最长等待 30 秒，后台网络等待 25 秒。切换图片后旧结果被丢弃。已有框时两种生成按钮都不可用，先清空才可重新生成。
 

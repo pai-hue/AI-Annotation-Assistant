@@ -27,7 +27,7 @@
 - 正常图片加载后将 canvas.width/height 设为 imgObj.width/height，通过 CSS 缩放显示，标注采用原图像素。
 - 播放模式可能使用缩略图；快速切图的占位状态可能保留上一张的 canvas 尺寸。预标注应只在原图确认加载完成、非播放状态下启用。
 - 类别为字符串数组，class_id 是数组索引。删除类别可能引起 ID 重排，因此请求返回时必须再次核对类别表，发生变化则丢弃结果。
-- 项目标识为 URL 路径中的 `projectName`（页面顶层同名变量），它不随类别增删变化，但**项目改名会改变它**。扩展把 `projectName` 作为 `project_id` 发给本机后端，仅用于示例图按项目隔离存放（哈希成目录名），不发送给模型。
+- 项目标识为 URL 路径中的 `projectName`（页面顶层同名变量），它不随类别增删变化，但**项目改名会改变它**。扩展把 `projectName` 作为 `project_id` 发给本机后端（YOLO 请求字段）；历史曾用于示例图隔离，现行代码不再读写示例库。
 
 ## 原生标注结构
 
@@ -59,7 +59,7 @@ annotations[filename].push({
 
 ## 候选适配架构
 
-1. content script 注入预标注按钮，负责状态提示。
+1. 扩展侧边栏（Edge Side Panel）提供预标注按钮，content script 负责页面状态读取、消息桥接与采集裁剪。
 2. 小型 MAIN-world 适配脚本读取当前图片和类别，创建请求快照。页面使用顶层 let/const；不能假定变量在 window 上，也不能从隔离执行环境直接访问。
 3. background 请求固定的本机服务；模拟阶段不传图片字节。真实模型阶段另行接入原图获取和服务端模型调用。
 4. 页面适配器收到结果后再次核对项目、文件名、尺寸、类别表、加载状态和已有标注。已有框或状态变化则拒绝写入。
@@ -110,3 +110,22 @@ annotations[filename].push({
 - 后端将千问 0～1000 的相对整数边界换算成原图像素；网站适配器继续接收 `x/y/width/height` 像素坐标，校验全部结果后写入原生框。
 - 23 项 Node 测试及 21 项 Python 测试通过；这些模型测试使用伪造响应。配置及验收步骤见 `docs/ai-setup.md`。
 - 2026-10-01 用户反馈：说明重新加载新版扩展并刷新原网站后，用户表示“ok，目前测试没有发现任何问题”。记录为本轮千问版本试用通过，未单独提供各异常场景及耗时数据；下一阶段为小批量流程与效率验证。本次仅同步文档。
+
+## 2026-10-27 侧边栏迁移
+
+- 原网页左下角悬浮面板与空白占位移除，改为点击工具栏图标打开 Edge 原生侧边栏（`sidePanel` 权限 + `side_panel.default_path` + `setPanelBehavior({openPanelOnActionClick:true})`，最低 Edge/Chrome 114）。
+- 消息链为 sidepanel ↔ background ↔ 目标标签页 content script ↔ MAIN 适配器。每个操作显式绑定 tabId/project-id/image-id/requestId，不依赖响应时的“当前活动标签页”；权威每标签页状态保留在 content script，侧边栏只是视图/控制器，关闭/重开侧边栏从 content script 恢复状态，不同标签页不共享类别选择和请求状态。
+- platform-content.js 移除面板 DOM，保留页面 postMessage 桥接、采集裁剪覆盖层、Enter 快捷键与 API 转发，新增 background 命令处理（PANEL_HELLO/PANEL_COMMAND）和 TAB_STATE 状态上报。侧边栏只在真实用户点击处校验 isTrusted，随后 content script 校验消息来源（sender.id）与目标标签页。
+- 业务与密钥安全不变：打开侧边栏、切页或页面消息不构成调用模型的授权。
+- 自动化测试用模拟 DOM 与本地生成图片/伪造响应；真实 Edge 侧边栏现场验收待开展。
+
+## 2026-10-27 已确认人工标注示例库（收录适配）— **2026-10-29 / 0.7.4 已移除**
+
+下列为历史说明；现行扩展不再提供采集/收录/示例库 UI 与 `/api/examples/*`、`/api/references`。
+
+- 新增「收录当前图片的标注」：`platform-main.js` 增加 `collectSummary()`（只读 `annotations[filename]` 原生标注，逐框校验类别、坐标与原图尺寸 `img_w/img_h` 一致，不修改标注/选中/保存状态）与 `collect` 分支（用 `captureImage(cstate, 640, crop)` 从 `imageCache` 原图缓存逐框裁剪，绝不读带标注叠层的编辑画布）。
+- 确认弹窗与写入之间用 `snapshotId`（项目名 + 文件名 + 图片 src + 尺寸 + 类别表 + 标注列表的哈希）绑定：预览后若图片/标注变化，确认被拒，避免过期确认收录错图。
+- 采集资格与预标注资格拆分：`snapshot()` 用于 AI/模拟（空标注才能预标注），`readAnnotationInfo()` 提供 `collectReady/annotationCount`（有原生标注且原图加载完成才能收录）；有标注图片仍禁止 AI/模拟，但允许收录。
+- 收录只读不改：结果处理分支只汇报“已收录/跳过重复/已满”数量，不调用 `draw()/renderRectList()` 等刷新，不触发网站自动保存。
+- 来源信息（文件名 + 框坐标生成的 `source_id`）仅用于本机去重，不进入模型请求体；项目名仍哈希成目录名、不发给千问。
+- 自动化测试用模拟 DOM 与本地生成图片/伪造响应；真实 Edge 侧边栏采集/预览/删除流程待现场验收。

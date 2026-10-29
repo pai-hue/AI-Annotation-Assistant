@@ -1,5 +1,6 @@
 # Python
 .venv/
+.venv-yolo/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -14,3 +15,16 @@ server/references/
 
 # ǰ������
 node_modules/
+# YOLO 训练集（本机用户数据）
+server/datasets/
+
+
+# YOLO 训练产出
+server/runs/
+*.pt
+!docs/**/*.pt
+
+
+# 本机 YOLO 权重（勿提交）
+server/models/*.pt
+

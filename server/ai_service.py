@@ -3,7 +3,6 @@
 import asyncio
 import base64
 import binascii
-import hashlib
 from dataclasses import dataclass, field
 from io import BytesIO
 import json
@@ -26,9 +25,6 @@ MODEL_TIMEOUT = 22
 QWEN_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 DEFAULT_MODEL = "qwen3-vl-flash"
 COORDINATE_SCALE = 1000
-# Category example images are stored locally and attached to AI requests to improve grounding.
-REFERENCE_MAX_SIDE = 640
-REFERENCES_DIR = Path(__file__).resolve().parent / "references"
 
 
 class AIError(Exception):
@@ -68,7 +64,7 @@ class AIRequest(StrictModel):
     input_width: int = Field(gt=0, le=MAX_SIDE)
     input_height: int = Field(gt=0, le=MAX_SIDE)
     image_data_url: str = Field(max_length=MAX_DATA_URL, repr=False)
-    # Local-only isolation key (the site's project name, hashed for storage). Never sent to Qwen.
+    # Site project name; kept on the request for local correlation. Never sent to Qwen.
     project_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
     classes: list[ProjectClass] = Field(min_length=1, max_length=100)
     enabled_class_ids: list[int] | None = Field(default=None, max_length=100)
@@ -92,24 +88,6 @@ class AIRequest(StrictModel):
         ids = {c.id for c in self.classes}
         if len(set(self.enabled_class_ids)) != len(self.enabled_class_ids) or any(i not in ids for i in self.enabled_class_ids):
             raise ValueError("Invalid enabled class ids")
-        return self
-
-
-class ReferenceRequest(StrictModel):
-    # Local-only isolation key (the site's project name, hashed for storage). Never sent to Qwen.
-    project_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
-    classes: list[ProjectClass] = Field(min_length=1, max_length=100)
-    class_id: int = Field(ge=0, le=1_000_000)
-    input_width: int = Field(gt=0, le=REFERENCE_MAX_SIDE)
-    input_height: int = Field(gt=0, le=REFERENCE_MAX_SIDE)
-    image_data_url: str = Field(max_length=MAX_DATA_URL, repr=False)
-
-    @model_validator(mode="after")
-    def validate_target(self):
-        if len({c.id for c in self.classes}) != len(self.classes) or any(not c.name.strip() for c in self.classes):
-            raise ValueError("Invalid class table")
-        if self.class_id not in {c.id for c in self.classes}:
-            raise ValueError("Unknown class")
         return self
 
 
@@ -159,78 +137,6 @@ def validate_image(request: AIRequest) -> None:
                             "图片无效或尺寸不符，请重新选择原图。")
 
 
-def validate_reference_image(request: ReferenceRequest) -> None:
-    _validate_encoded_image(request.image_data_url, request.input_width, request.input_height,
-                            "示例图片无效或尺寸不符，请重新采集。")
-
-
-def project_key(project_id: str) -> str:
-    # Local-only isolation: hash the site's project name into a safe directory name. The
-    # raw project name is never used as a path component and never sent to Qwen.
-    return hashlib.sha256(project_id.encode("utf-8")).hexdigest()[:16]
-
-
-def _class_name(classes: list[ProjectClass], class_id: int) -> str:
-    return next(c.name for c in classes if c.id == class_id)
-
-
-def _read_index(directory: Path) -> dict:
-    path = directory / "index.json"
-    if not path.is_file():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def save_reference(request: ReferenceRequest) -> None:
-    validate_reference_image(request)
-    header, data = request.image_data_url.split(",", 1)
-    ext = "jpg" if header == "data:image/jpeg;base64" else "png"
-    directory = REFERENCES_DIR / project_key(request.project_id)
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / f"{request.class_id}.{ext}").write_bytes(base64.b64decode(data, validate=True))
-    # Record the class name at capture time so a later rename or ID reuse cannot silently
-    # attach this example to a different class.
-    index = _read_index(directory)
-    index[str(request.class_id)] = _class_name(request.classes, request.class_id)
-    (directory / "index.json").write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
-
-
-def load_references(project_id: str, classes: list[ProjectClass]) -> list[dict]:
-    directory = REFERENCES_DIR / project_key(project_id)
-    if not directory.is_dir():
-        return []
-    index = _read_index(directory)
-    names = {c.id: c.name for c in classes}
-    references = []
-    for path in sorted(directory.iterdir()):
-        if path.suffix not in (".jpg", ".png"):
-            continue
-        try:
-            class_id = int(path.stem)
-        except ValueError:
-            continue
-        if class_id not in names:
-            continue
-        # Only use a reference whose captured class name still matches the current class at
-        # this index. This prevents a renamed class or a reused index from being mislabeled.
-        if index.get(str(class_id)) != names[class_id]:
-            continue
-        try:
-            raw = path.read_bytes()
-        except OSError:
-            continue
-        if not raw or len(raw) > MAX_IMAGE_BYTES:
-            continue
-        mime = "image/jpeg" if path.suffix == ".jpg" else "image/png"
-        references.append({"class_id": class_id, "class_name": names[class_id],
-                           "data_url": f"data:{mime};base64," + base64.b64encode(raw).decode()})
-    return references
-
-
 def active_classes(request: AIRequest) -> list[ProjectClass]:
     if request.enabled_class_ids is None:
         return request.classes
@@ -238,23 +144,16 @@ def active_classes(request: AIRequest) -> list[ProjectClass]:
     return [c for c in request.classes if c.id in enabled]
 
 
-def build_payload(request: AIRequest, model: str, references=()) -> dict:
+def build_payload(request: AIRequest, model: str) -> dict:
     active = active_classes(request)
     # Qwen3-VL supports JSON Object mode; validate the full schema locally.
     example = {"objects": [
         {"class_id": active[0].id, "xmin": 100, "ymin": 200, "xmax": 400, "ymax": 600},
         {"class_id": active[0].id, "xmin": 400, "ymin": 200, "xmax": 700, "ymax": 600},
     ]}
-    content = []
-    if references:
-        content.append({"type": "text", "text": "下面是一些类别的示例图，用于帮助判断类别外观；"
-                                              "示例图的数量和其中的物体数量不代表目标图片的物体数量。"
-                                              "没有示例图的类别请按类别名称识别。目标检测始终针对最后一张目标图片。"})
-        for ref in references:
-            content.append({"type": "image_url", "image_url": {"url": ref["data_url"]}})
-            content.append({"type": "text", "text": f"这是类别 ID {ref['class_id']}（{ref['class_name']}）的示例图。"})
-        content.append({"type": "text", "text": "以下是需要检测的目标图片："})
-    content.append({"type": "image_url", "image_url": {"url": request.image_data_url}})
+    content = [
+        {"type": "image_url", "image_url": {"url": request.image_data_url}},
+    ]
     content.append({"type": "text", "text": "请检测图片中以下类别的所有可见实例。项目类别：" + json.dumps(
         [c.model_dump() for c in active], ensure_ascii=False)
         + "\nJSON 格式示例（同一类别的两个独立实例分别出框；类别、数量和坐标仅作格式说明，"
@@ -321,16 +220,12 @@ async def generate_annotations(request: AIRequest, settings: Settings, *, transp
     if not settings.api_key:
         raise AIError("not_configured", "尚未配置千问 API Key，请在项目根目录 .env 中填写北京地域的 DASHSCOPE_API_KEY。", 503)
     validate_image(request)
-    references = load_references(request.project_id, request.classes)
-    if request.enabled_class_ids is not None:
-        enabled = set(request.enabled_class_ids)
-        references = [ref for ref in references if ref["class_id"] in enabled]
     try:
         # One attempt, fixed destination, no provider redirects and no automatic retries.
         async with asyncio.timeout(MODEL_TIMEOUT):
             async with httpx.AsyncClient(timeout=MODEL_TIMEOUT, follow_redirects=False, transport=transport) as client:
                 response = await client.post(QWEN_URL, headers={"Authorization": f"Bearer {settings.api_key}"},
-                                             json=build_payload(request, settings.model, references))
+                                             json=build_payload(request, settings.model))
         if not response.is_success:
             messages = {
                 400: ("provider_request", "千问请求被拒绝，请检查 QWEN_MODEL 是否支持图片、非思考模式和 JSON 输出。"),

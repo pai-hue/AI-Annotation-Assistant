@@ -1,3 +1,46 @@
+# 本机 YOLO 运行环境（2026-10-29）
+
+预标注已改为本机 YOLO，**不要**用未装 Ultralytics 的 `.venv`（多为系统 Python 3.14）启动服务，否则侧边栏会报「未安装 Ultralytics」。
+
+## 项目环境 `.venv-yolo`
+
+- 路径：`D:\AI-Annotation-Assistant\.venv-yolo`（已写入 `.gitignore`，勿提交）
+- Python：3.12（`py -3.12`）
+- 含 CUDA 版 torch / torchvision、ultralytics，以及 `server/requirements.txt`
+
+若本机尚无该环境，在项目根目录 PowerShell 执行：
+
+```powershell
+py -3.12 -m venv .venv-yolo
+.\.venv-yolo\Scripts\python.exe -m pip install --upgrade pip
+.\.venv-yolo\Scripts\python.exe -m pip install -r server\requirements.txt
+.\.venv-yolo\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+.\.venv-yolo\Scripts\python.exe -m pip install ultralytics
+```
+
+验证（应打印 `True` 与 `model.names`）：
+
+```powershell
+.\.venv-yolo\Scripts\python.exe -c "import torch,ultralytics; print(torch.__version__, torch.cuda.is_available()); from ultralytics import YOLO; from dotenv import load_dotenv; import os; load_dotenv(); print(YOLO(os.getenv('YOLO_MODEL_PATH')).names)"
+```
+
+启动服务：
+
+```powershell
+.\scripts\start-server.ps1
+```
+
+或：
+
+```powershell
+.\.venv-yolo\Scripts\python.exe -m uvicorn server.main:app --host 127.0.0.1 --port 18000
+```
+
+打开 `http://127.0.0.1:18000/api/ai/status`，应看到 `provider: yolo`、`configured: true`、`ultralytics: true`、`load_error: null`，以及权重内的 `class_names`。
+
+原 `.venv` 可保留给不需要 YOLO 的轻量测试；**不要删除** `D:\YoloWebAgentStarter\.venv`（其他项目用）。
+
+---
 # M3：配置通义千问预标注（v0.4.0）
 
 本版本使用阿里云百炼的通义千问视觉模型，默认 `qwen3-vl-flash`。插件只生成初始框，审核、调整、保存仍在原网站；已验证的模拟链路继续可用。
@@ -26,8 +69,8 @@ QWEN_MODEL=qwen3-vl-flash
 终端当前目录应为 `D:\AI-Annotation-Assistant`：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r server\requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn server.main:app --host 127.0.0.1 --port 18000 --reload
+.\scripts\start-server.ps1
+# 或：.\.venv-yolo\Scripts\python.exe -m uvicorn server.main:app --host 127.0.0.1 --port 18000
 ```
 
 如果服务已经运行并正常热更新，无需再启动第二个进程；更新依赖后如提示导入错误，在原终端 Ctrl+C，再执行启动命令。
@@ -43,24 +86,32 @@ QWEN_MODEL=qwen3-vl-flash
 ## 3. 重新加载扩展
 
 1. 在 Edge 地址栏输入 `edge://extensions/`。
-2. 找到 FramePilot，点击重新加载，确认版本为 `1.0.0`。
+2. 找到 FramePilot，点击重新加载，确认版本为 `1.2.0`。
 3. 刷新原网站标注页。
-4. 暂停播放，选择一张没有标注、允许发送给阿里云百炼的测试图片；确保项目已有合适的类别名。
-5. 面板显示“预标注”和“模拟测试”。模拟测试保留原来的固定框功能，不发送图片。
-6. 勾选“允许将当前图片、示例图及项目类别发送到阿里云百炼”，点击“预标注”或按快捷键 Enter。
-7. 等待结果期间保持当前图片和类别表不变。生成成功后，在原网站使用原有工具检查和修改。
+4. 点击浏览器工具栏的 FramePilot 图标，打开当前标签页的侧边栏。
+5. 暂停播放，选择一张没有标注、允许发送给阿里云百炼的测试图片；确保项目已有合适的类别名。
+6. 侧边栏显示“预标注”和“模拟测试”。模拟测试保留原来的固定框功能，不发送图片。侧边栏会显示当前连接的项目；非支持网站或页面未就绪时会给出提示并禁用操作。
+7. 勾选“允许将当前图片、示例图及项目类别发送到阿里云百炼”，在侧边栏点击“预标注”或按快捷键 Enter。
+8. 等待结果期间保持当前图片和类别表不变。生成成功后，在原网站使用原有工具检查和修改。
 
 AI 使用项目类别表中的全部类别，保留原 ID；它不会把所有目标都改成当前鼠标选中的类别。当前选中类别仅决定模拟框的类别。类别名应能表达目标含义，`part` 这样的泛称可能得到较宽泛的结果。
 
 有框的图片不会被覆盖。先用另一张空标注测试图；需要删除或修改已有框时在原网站操作。网站可能自动保存初始框到公司后台，这不等于人工审核完成。
 
-可选——采集类别示例图提升识别：在空标注图上用网站选中某个类别，点面板「采集示例」，在原网站画布上拖拽框选要采集的区域后点「确认」，该区域会以缩小副本存到本机 `server/references/`（每类一张，重复采集覆盖）。之后每次预标注会自动把已存示例图随请求发送，让模型对照示例对齐类别；没有示例图的类别仍按类别名识别。示例图只存本机，仅在勾选同意后随 AI 请求发送到阿里云百炼。
+**2026-10-29 / 规格 0.7.4：示例库已从前端与后端移除。** 下列为历史说明，勿再按此操作：
 
-示例图按项目隔离存放：目录名用项目名的哈希（SHA-256 前 16 位），后端只把它当本地隔离键、不拼进路径、也不发给千问。同一项目增删类别后，已有示例仍按 `class_id` 关联；但后端会同时记录采集时的类别名，加载时只有当前类别名与采集时一致才使用，因此**类别改名或原网站删除类别导致 ID 重排后，旧示例不会被错误用到别的类别，需要重新采集**。项目改名后旧示例文件仍保留在原目录、不会删除，但不会自动关联到新项目名。旧版本（按类别表哈希分目录）留下的示例文件也不会被删除或自动迁移，请按需重新采集。
+~~可选——示例库提升识别（推理时视觉少样本，不是训练）：~~
+
+- **采集单张示例图**：在空标注图上用网站选中某个类别，点侧边栏「采集示例」，在原网站画布上拖拽框选要采集的区域后点「确认」，该区域会以缩小副本存到本机 `server/references/`。之后每次预标注会自动把已存示例图随请求发送，让模型对照示例对齐类别；没有示例图的类别仍按类别名识别。
+- **收录当前图片的标注**（推荐）：在原网站人工标注并确认框/类别正确后，点侧边栏「收录当前图片的标注」，核对确认弹窗里的项目/图片/框数/各类别计数，点「确认收录」。插件会从原图缓存逐框裁剪，按「项目 + 类别」存为本机示例（每类最多 5 张，重复来源自动跳过，超出会提示、不覆盖）。
+
+示例库侧边栏按类别显示已存数量与缩略图，可删除单张、点「刷新示例」按需更新（不并入轮询）。预标注时后端按确定性轮转取每个启用类别最多 2 张、全请求最多 12 张示例图，标记为“类别外观参考”，最后一张图是待标注目标、只返回目标框；已存数量与模型实际使用数量可能不同，且不超过提供方对图片数量的限制。示例图只存本机，仅在勾选同意后随 AI 请求发送到阿里云百炼；本地采集、预览、删除均不调用模型。
+
+示例图按项目隔离存放：目录名用项目名的哈希（SHA-256 前 16 位），后端只把它当本地隔离键、不拼进路径、也不发给千问。后端记录采集时类别名，加载时只有当前类别名与采集时一致才使用，因此**类别改名或原网站删除类别导致 ID 重排后，旧示例不会被错误用到别的类别，需要重新采集**。项目改名后旧示例文件仍保留在原目录、不会删除，但不会自动关联到新项目名。旧版本（按类别表哈希分目录、或 `<class_id>.jpg` + `index.json`）留下的示例文件也不会被删除或自动迁移，请按需重新采集。
 
 ## 4. 图片发送范围与接口
 
-- 页面打开、切图、轮询状态和模拟测试不发送图片。每次真实请求由面板上的人工点击触发。
+- 页面打开、切图、轮询状态和模拟测试不发送图片。每次真实请求由侧边栏上的人工点击触发。
 - 从已加载的原图缓存获取画面，不截取浏览器窗口，不使用带标注线的编辑画布。
 - 图片等比例缩小到最长边不超过 1600 像素，生成 JPEG（质量 0.85、透明区域白底），编码文件最多 2 MiB。
 - 若本机存有类别示例图，后端会随目标图一起把示例图发送给模型用于对齐类别；示例图等比例缩小到最长边不超过 640 像素，每类一张。
@@ -118,9 +169,16 @@ AI 使用项目类别表中的全部类别，保留原 ID；它不会把所有�
 
 2026-10-09 四个修复：①示例图按项目隔离——请求链新增 `project_id`（原网站项目名，仅本地隔离、不发给千问），目录名改为项目名哈希，后端记录采集时类别名，改名或 ID 重排后旧示例不会被错误关联、需重新采集，旧示例文件保留且不自动迁移；②采集示例期间按 Enter 不再触发 AI/模拟预标注（统一请求入口检查裁剪状态）；③类别筛选在请求/裁剪期间锁定并提供禁用视觉态，同项目新增类别保留已关闭类别的选择，切换项目重置筛选，事件处理函数同样检查锁定；④同事分发文档补充排除示例图/真实图片/临时文件/日志。新增 5 项 Node 测试与 4 项 Python 测试，43 项 Node 测试、33 项 Python 测试全部通过。均为本地生成图片与伪造响应，未调用真实千问、未上传真实图片、未改动公司网站数据；Edge 现场验收待开展。
 
+2026-10-27 悬浮面板迁移为 Edge 原生侧边栏：点击工具栏 FramePilot 图标打开当前标签页的侧边栏，原网页不再有悬浮面板或空白占位。界面保留预标注/模拟测试/采集示例、发送许可勾选、类别筛选与状态/成功/错误提示，删除拖动缩放、自适应侧边栏宽度、类别列表可滚动；侧边栏显示当前项目，非支持网站或页面未就绪时提示并禁用操作。业务与密钥安全不变，打开侧边栏/切页/页面消息不构成调用模型的授权。新增 sidepanel.html/css/js，background 增加侧边栏路由，platform-content.js 移除面板 DOM、保留页面桥接/裁剪/Enter/API 转发并新增命令处理与状态上报。59 项 Node 测试、33 项 Python 测试全部通过（Python 未改动）。均为本地生成图片与伪造响应，未调用真实千问、未上传真实图片、未改动公司网站数据；真实 Edge 侧边栏现场验收待开展。
+
+2026-10-27 已确认人工标注示例库：侧边栏新增「收录当前图片的标注」与示例库（按项目隔离、每类上限 5 张、缩略图预览、可删除、按需拉取），采集前弹窗核对框/类别并注明仅本机保存、同意后随预标注发送；采集资格与预标注资格拆分，有标注图片仍禁止 AI/模拟但允许收录。后端新增 `POST /api/examples/collect|list|delete`，示例存为 `examples.json`（v2）+ 裁剪 JPEG，兼容旧版 `<class_id>.jpg`/`index.json` 只读，按类别名匹配防改名/ID 重排误关联，去重 + 原子批量校验。模型调用改为每启用类别最多 2 张、全请求最多 12 张示例图，确定性轮转，来源信息不进模型请求。新增 20 项 Node 测试与 10 项 Python 测试，共 79 项 Node、43 项 Python 全部通过。均为本地生成图片与伪造响应，未调用真实千问、未上传真实图片、未改动公司网站数据；示例库对识别准确率的实际提升与真实 Edge 侧边栏采集/预览/删除流程待现场验收，不代表模型效果已量化。
+
 复测命令（均不产生真实模型 API 用量）：
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest server.test_api server.test_ai -v
-node --test extension/extension.test.cjs extension/platform.test.cjs extension/platform-content.test.cjs
+.\.venv-yolo\Scripts\python.exe -m unittest server.test_api server.test_ai server.test_yolo_service_unit -v
+node --test extension/extension.test.cjs extension/platform.test.cjs extension/platform-content.test.cjs extension/sidepanel.test.cjs
 ```
+
+
+2026-10-29：规格 0.7.4 / 扩展 1.5.1 移除示例库（采集示例、收录当前标注、侧边栏示例库、`POST /api/examples/*`、`POST /api/references` 及对应测试）。`server/references/` 用户数据未删除。预标注仍为本机 YOLO；保留「当前图片已有标注，插件不会覆盖…」。
